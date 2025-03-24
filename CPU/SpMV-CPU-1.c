@@ -1,9 +1,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <cblas.h>
+#include "my_time_lib.h"
+// #include <cblas.h>
 
-char* path = "../Data/1138_bus.mtx";
+char* path = "./Data/1138_bus.mtx";
 
 void print_int_array(int* a, int n) {
     for (int i=0; i<n; i++) {
@@ -39,6 +40,12 @@ void matrix_multiplication(double *A, double *B, double *C, int rows, int cols) 
 
 int main(void) {
     FILE *fin = fopen(path, "r");
+
+    if (!fin) {
+        perror("Failed to open file");
+        return 1;
+    }
+
     char buffer[100];
     int first = 1;
 
@@ -56,9 +63,11 @@ int main(void) {
     while(fgets(buffer, 100, fin)) {
         if (buffer[0] != '%') {
             char *token = strtok(buffer, " ");
-            char split_buffer[3][10];
-            for(int i=0; i<3; i++) {
-                sprintf(split_buffer[i], "%s", token);
+            char split_buffer[3][64];
+            for (int i = 0; i < 3; i++) {
+                if (!token) break;
+                strncpy(split_buffer[i], token, 63);
+                split_buffer[i][63] = '\0';
                 token = strtok(NULL, " ");
             }
             if (first == 1) {
@@ -93,6 +102,8 @@ int main(void) {
     
     // Naive solution: create a sparse matrix from the COO
     double *M = (double *)malloc(rows*cols*sizeof(double));
+    TIMER_DEF(var);
+    TIMER_START(var);
     memset(M, 0, rows*cols*sizeof(double));
     for(int i=0; i<values; i++) {
         M[Arows[i]*cols+Acols[i]] = Avals[i];
@@ -100,11 +111,12 @@ int main(void) {
     // Perform matrix multiplication
     double *C = (double *)malloc(rows*sizeof(double));
     matrix_multiplication(M, v, C, rows, cols);
+    TIMER_STOP(var);
+    printf("Elapsed time: %f\n", TIMER_ELAPSED(var));
     
-    double *C1 = (double *)malloc(rows*sizeof(double));
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-        rows, 1, cols, 1.0, (const double*)&A, rows, (const double*)&B, cols, 0.0, (double*)&C1, rows);    
-    print_double_array(C1, rows);
+    // double *C1 = (double *)malloc(rows*sizeof(double));
+    // cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, rows, 1, cols, 1.0, M, cols, v, 1, 0.0, C1, 1);  
+    // print_double_array(C1, rows);
 
     fclose(fin);
 
