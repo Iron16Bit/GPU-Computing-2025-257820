@@ -3,8 +3,6 @@
 #include <string.h>
 #include "my_time_lib.h"
 
-char* path = "./Data/1138_bus.mtx";
-
 void print_int_array(int* a, int n) {
     for (int i=0; i<n; i++) {
         printf("%d ", a[i]);
@@ -48,8 +46,8 @@ void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, dou
     }
 }
 
-int main(void) {
-    FILE *fin = fopen(path, "r");
+int main(int argc, char *argv[]) {
+    FILE *fin = fopen(argv[1], "r");
 
     if (!fin) {
         perror("Failed to open file");
@@ -117,7 +115,7 @@ int main(void) {
     matrix_multiplication(Arows, Acols, Avals, v, C, rows, cols, values); 
 
     TIMER_STOP(var);
-    printf("Elapsed time: %f\n", TIMER_ELAPSED(var));
+    printf("[CPU coo] Elapsed time: %f\n", TIMER_ELAPSED(var));
 
     fclose(fin);
 

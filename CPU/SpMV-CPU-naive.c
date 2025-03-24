@@ -4,8 +4,6 @@
 #include "my_time_lib.h"
 // #include <cblas.h>
 
-char* path = "./Data/1138_bus.mtx";
-
 void print_int_array(int* a, int n) {
     for (int i=0; i<n; i++) {
         printf("%d ", a[i]);
@@ -38,8 +36,8 @@ void matrix_multiplication(double *A, double *B, double *C, int rows, int cols) 
     }
 }
 
-int main(void) {
-    FILE *fin = fopen(path, "r");
+int main(int argc, char *argv[]) {
+    FILE *fin = fopen(argv[1], "r");
 
     if (!fin) {
         perror("Failed to open file");
@@ -113,7 +111,7 @@ int main(void) {
     // Perform matrix multiplication
     matrix_multiplication(M, v, C, rows, cols);
     TIMER_STOP(var);
-    printf("Elapsed time: %f\n", TIMER_ELAPSED(var));
+    printf("[CPU naive] Elapsed time: %f\n", TIMER_ELAPSED(var));
     
     // double *C1 = (double *)malloc(rows*sizeof(double));
     // cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, rows, 1, cols, 1.0, M, cols, v, 1, 0.0, C1, 1);  
