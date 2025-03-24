@@ -102,14 +102,14 @@ int main(void) {
     
     // Naive solution: create a sparse matrix from the COO
     double *M = (double *)malloc(rows*cols*sizeof(double));
+    double *C = (double *)malloc(rows*sizeof(double));
+    memset(M, 0, rows*cols*sizeof(double));
     TIMER_DEF(var);
     TIMER_START(var);
-    memset(M, 0, rows*cols*sizeof(double));
     for(int i=0; i<values; i++) {
         M[Arows[i]*cols+Acols[i]] = Avals[i];
     }
     // Perform matrix multiplication
-    double *C = (double *)malloc(rows*sizeof(double));
     matrix_multiplication(M, v, C, rows, cols);
     TIMER_STOP(var);
     printf("Elapsed time: %f\n", TIMER_ELAPSED(var));
