@@ -28,7 +28,7 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void block_matrix_multiplication(double *M, double* v, double *C, int rows, int cols, int row_block, int col_block, int iteration) {
+void block_matrix_multiplication(double *M, double* v, double *C, int cols, int row_block, int col_block, int iteration) {
     int c_offset = iteration / (cols/col_block) * row_block;
     int v_offset = iteration % (cols/col_block) * col_block;
     int m_offset = c_offset * col_block + v_offset;
@@ -120,6 +120,7 @@ int main(void) {
     double *M = (double *)malloc(rows*cols*sizeof(double));
     double *C = (double *)malloc(rows*sizeof(double));
     memset(M, 0, rows*cols*sizeof(double));
+    memset(C, 0, rows*sizeof(double));
     TIMER_DEF(var);
     TIMER_START(var);
     // COO -> Matrix
@@ -128,11 +129,10 @@ int main(void) {
     }
     // Perform block-based matrix multiplication
     for (int i=0; i<(rows*cols)/(row_block*col_block); i++) {
-        block_matrix_multiplication(M, v, C, rows, cols, row_block, col_block, i);
+        block_matrix_multiplication(M, v, C, cols, row_block, col_block, i);
     }
     TIMER_STOP(var);
     printf("Elapsed time: %f\n", TIMER_ELAPSED(var));
-    print_double_array(C, rows);
 
     fclose(fin);
 
