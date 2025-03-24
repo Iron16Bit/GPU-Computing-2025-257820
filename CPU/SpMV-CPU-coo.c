@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "my_time_lib.h"
-// #include <cblas.h>
 
 char* path = "./Data/1138_bus.mtx";
 
@@ -29,12 +28,23 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void matrix_multiplication(double *A, double *B, double *C, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        C[i] = 0;
-        for (int j = 0; j < cols; j++) {
-            C[i] += (A[i * cols + j] * B[j]);
-        }
+void swap(int *Arows, int *Acols, double *Avals, int i, int j) {
+    int tmp_row = Arows[i];
+    int tmp_col = Acols[i];
+    double tmp_val = Avals[i];
+
+    Arows[i] = Arows[j];
+    Acols[i] = Arows[j];
+    Avals[i] = Avals[j];
+
+    Arows[j] = tmp_row;
+    Acols[j] = tmp_col;
+    Avals[j] = tmp_val;
+}
+
+void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
+    for (int i=0; i<values; i++) {
+        C[Arows[i]] += Avals[i] * v[Acols[i]];
     }
 }
 
@@ -99,25 +109,15 @@ int main(void) {
     for (int i=0; i<cols; i++) {
         v[i] = 1.0;
     }
-    
-    // Naive solution: create a sparse matrix from the COO
-    double *M = (double *)malloc(rows*cols*sizeof(double));
+
     double *C = (double *)malloc(rows*sizeof(double));
-    memset(M, 0, rows*cols*sizeof(double));
     memset(C, 0, rows*sizeof(double));
     TIMER_DEF(var);
     TIMER_START(var);
-    for(int i=0; i<values; i++) {
-        M[Arows[i]*cols+Acols[i]] = Avals[i];
-    }
-    // Perform matrix multiplication
-    matrix_multiplication(M, v, C, rows, cols);
+    matrix_multiplication(Arows, Acols, Avals, v, C, rows, cols, values); 
+
     TIMER_STOP(var);
     printf("Elapsed time: %f\n", TIMER_ELAPSED(var));
-    
-    // double *C1 = (double *)malloc(rows*sizeof(double));
-    // cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, rows, 1, cols, 1.0, M, cols, v, 1, 0.0, C1, 1);  
-    // print_double_array(C1, rows);
 
     fclose(fin);
 
@@ -125,7 +125,6 @@ int main(void) {
     free(Acols);
     free(Avals);
     free(v);
-    free(M);
     free(C);
 
     return 0;
