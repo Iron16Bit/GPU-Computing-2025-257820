@@ -26,20 +26,6 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void swap(int *Arows, int *Acols, double *Avals, int i, int j) {
-    int tmp_row = Arows[i];
-    int tmp_col = Acols[i];
-    double tmp_val = Avals[i];
-
-    Arows[i] = Arows[j];
-    Acols[i] = Arows[j];
-    Avals[i] = Avals[j];
-
-    Arows[j] = tmp_row;
-    Acols[j] = tmp_col;
-    Avals[j] = tmp_val;
-}
-
 void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
     for (int i=0; i<values; i++) {
         C[Arows[i]] += Avals[i] * v[Acols[i]];
