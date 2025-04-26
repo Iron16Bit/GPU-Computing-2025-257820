@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
     TIMER_START(var);
     matrix_multiplication(row_pointer, Acols, Avals, v, C, rows, cols, values); 
     TIMER_STOP(var);
-    print_double_array(C, rows);
+    // print_double_array(C, rows);
     printf("[CPU csr] Elapsed time: %f\n", TIMER_ELAPSED(var));
 
     fclose(fin);
