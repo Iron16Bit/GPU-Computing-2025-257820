@@ -61,6 +61,20 @@ void sort(int* Arows, int* Acols, double* Avals, int n) {
     }
 }
 
+double calculateBandwidthGBs(int values, int rows, double timeMs) {
+    double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
+    double vector_size = rows * sizeof(double); // Dense vector size in bytes
+    double bytesAccessed = COO_size + vector_size;
+
+    // Convert ms to seconds and bytes to GB
+    double timeS = timeMs * 1e-3;
+    double dataGB = bytesAccessed * 1e-9;
+    
+    return dataGB / timeS;
+}
+
+int ITERATIONS = 10;
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
@@ -76,6 +90,7 @@ int main(int argc, char *argv[]) {
 
     char buffer[100];
     int first = 1;
+    double totalTime = 0.0;
 
     int rows;
     int cols;
@@ -144,7 +159,7 @@ int main(int argc, char *argv[]) {
 
     cudaEvent_t start, stop;
 
-    for (int i=0; i<10; i++) {
+    for (int i=0; i<ITERATIONS; i++) {
         cudaMemset(C, 0, rows * sizeof(double));
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
@@ -172,11 +187,17 @@ int main(int argc, char *argv[]) {
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
         printf("Kernel completed in %fms\n", e_time);
+        totalTime += e_time;
 
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
     }
     // print_double_array(C, rows);
+
+    // Calculate average time
+    double avg_time = totalTime / ITERATIONS;
+    printf("Average time: %fms\n", avg_time);
+    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, avg_time));
 
     fclose(fin);
     
