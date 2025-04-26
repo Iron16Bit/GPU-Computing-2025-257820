@@ -152,6 +152,7 @@ int main(int argc, char *argv[]) {
     int N = rows;
     int threadsPerBlock = 256;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    int sharedMemSize = cols*sizeof(double);
 
     cudaEvent_t start, stop;
 
@@ -168,8 +169,6 @@ int main(int argc, char *argv[]) {
         cudaMemPrefetchAsync(Avals, values*sizeof(double), device, NULL);
         cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
         cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
-        
-        int sharedMemSize = cols*sizeof(double);
 
         cudaEventRecord(start);
         spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values);
