@@ -3,22 +3,24 @@
 #include <string.h>
 
 __global__
-void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values, int *rowOffsets) {
     int current_row = blockIdx.x * blockDim.x + threadIdx.x;
     extern __shared__ double sharedData[];
 
+    // Copy vector to shared memory
     for (int i = threadIdx.x; i < cols; i += blockDim.x) {
         sharedData[i] = v[i];
     }
     __syncthreads();
 
+    // Use row offsets to avoid scanning from the beginning
     if (current_row < rows) {
-        for (int i=0; i<values; i++) {
-            if (Arows[i] == current_row) {
-                C[current_row] += (Avals[i] * sharedData[Acols[i]]);
-            } else if (Arows[i] > current_row) {
-                break;
-            }
+        int start = rowOffsets[current_row];
+        int end = (current_row < rows - 1) ? rowOffsets[current_row + 1] : values;
+        
+        for (int i = start; i < end; i++) {
+            // All elements in this range belong to current_row, no need to check
+            C[current_row] += (Avals[i] * sharedData[Acols[i]]);
         }
     }
 }
@@ -152,6 +154,32 @@ int main(int argc, char *argv[]) {
     // Sort COO
     sort(Arows, Acols, Avals, values);
 
+    // After sorting the COO data, build row offsets array
+    int *rowOffsets;
+    cudaMallocManaged(&rowOffsets, (rows + 1) * sizeof(int));
+    
+    // Initialize all offsets to -1 (meaning no elements for that row)
+    for (int i = 0; i < rows + 1; i++) {
+        rowOffsets[i] = -1;
+    }
+    
+    // Set the offset for each row to the first occurrence of that row
+    for (int i = 0; i < values; i++) {
+        if (rowOffsets[Arows[i]] == -1) {
+            rowOffsets[Arows[i]] = i;
+        }
+    }
+    
+    // Fill in any rows that don't have elements with the next valid offset
+    int lastValidOffset = values;
+    for (int i = rows - 1; i >= 0; i--) {
+        if (rowOffsets[i] == -1) {
+            rowOffsets[i] = lastValidOffset;
+        } else {
+            lastValidOffset = rowOffsets[i];
+        }
+    }
+
     // Create dense vector using cudaMallocManaged
     double *v;
     cudaMallocManaged(&v, cols*sizeof(double));
@@ -176,7 +204,7 @@ int main(int argc, char *argv[]) {
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
         
-        // Prefetch data to GPU
+        // Prefetch data to GPU including row offsets
         int device = -1;
         cudaGetDevice(&device);
         cudaMemPrefetchAsync(Arows, values*sizeof(int), device, NULL);
@@ -184,9 +212,10 @@ int main(int argc, char *argv[]) {
         cudaMemPrefetchAsync(Avals, values*sizeof(double), device, NULL);
         cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
         cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
+        cudaMemPrefetchAsync(rowOffsets, (rows+1)*sizeof(int), device, NULL);
 
         cudaEventRecord(start);
-        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values);
+        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values, rowOffsets);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
@@ -196,14 +225,12 @@ int main(int argc, char *argv[]) {
         
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
-        // print_double_array(C, rows);
         printf("Kernel completed in %fms\n", e_time);
         totalTime += e_time;
 
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
     }
-    // print_double_array(C, rows);
 
     // Calculate average time
     double avg_time = totalTime / ITERATIONS;
@@ -218,6 +245,7 @@ int main(int argc, char *argv[]) {
     cudaFree(Avals);
     cudaFree(v);
     cudaFree(C);
+    cudaFree(rowOffsets);
 
     return 0;
 }
