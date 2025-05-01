@@ -2,19 +2,47 @@
 #include <stdio.h>
 #include <string.h>
 
-__global__
-void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    extern __shared__ double sharedData[];
+// Based on Algorithm 3 from https://www.sciencedirect.com/science/article/pii/S1877050912001287
+// And https://medium.com/analytics-vidhya/sparse-matrix-vector-multiplication-with-cuda-42d191878e8f
+// thread-per-slice implementation with:
+// - 32 bits per slice
+// - slice = consecutive rows that can fit in shared memory
 
-    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
-        sharedData[i] = v[i];
+__global__
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values, int *Aslices) {
+    // Compute slice info
+    int slice_id = blockIdx.x;
+    int tid = threadIdx.x;
+    int slice_start = Aslices[slice_id];
+    int slice_end = Aslices[slice_id + 1];
+    int slice_nnz = slice_end - slice_start;
+
+    // Shared memory layout: first slice_nnz doubles, then slice_nnz ints
+    extern __shared__ char shared[];
+    double* sdata = (double*)shared;
+    int* srows = (int*)&sdata[slice_nnz];
+
+    // Fill shared memory
+    for (int i = tid; i < slice_nnz; i += blockDim.x) {
+        int idx = slice_start + i;
+        srows[i] = Arows[idx];
+        sdata[i] = Avals[idx] * v[Acols[idx]];
     }
     __syncthreads();
 
-    if (tid < values) {
-        double product = Avals[tid] * sharedData[Acols[tid]];
-        atomicAdd(&C[Arows[tid]], product);
+    for (int i = tid; i < slice_nnz; i += blockDim.x) {
+        // Only the last occurrence of a row in the slice writes the sum
+        if (i == slice_nnz - 1 || srows[i] != srows[i + 1]) {
+            double sum = sdata[i];
+            int row = srows[i];
+            int j = i - 1;
+            // Accumulate backwards for all previous elements with the same row
+            while (j >= 0 && srows[j] == row) {
+                sum += sdata[j];
+                j--;
+            }
+            atomicAdd(&C[row], sum);
+        }
     }
 }
 
@@ -80,7 +108,9 @@ double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
     return dataGB / timeS;
 }
 
+// GLOBAL VARIABLES
 int ITERATIONS = 11;
+int SHAREDMEM = 1024;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -148,6 +178,35 @@ int main(int argc, char *argv[]) {
     // Sort COO
     sort(Arows, Acols, Avals, values);
 
+    // Build SCOO from COO
+    // We want to save the beginning of each slice
+    // In a slice we want the consecutive rows whose nnz can fit in shared memory
+    int *Aslices;
+    int num_slices = 0;
+    int max_slice_nnz = 0;
+    // Allocate worst-case space for Aslices (at most values+1 slices)
+    cudaMallocManaged(&Aslices, (values + 1) * sizeof(int));
+
+    int nnz_in_slice = 0;
+    Aslices[0] = 0;
+    num_slices = 1;
+    for (int i = 0; i < values; ++i) {
+        nnz_in_slice++;
+        bool next_is_new_row = (i < values - 1 && Arows[i] != Arows[i + 1]);
+        if (nnz_in_slice >= SHAREDMEM && next_is_new_row) {
+            Aslices[num_slices] = i + 1;
+            if (nnz_in_slice > max_slice_nnz) max_slice_nnz = nnz_in_slice;
+            nnz_in_slice = 0;
+            num_slices++;
+        }
+    }
+    // Ensure the last slice ends at the last element
+    if (Aslices[num_slices - 1] != values) {
+        Aslices[num_slices] = values;
+        if (nnz_in_slice > max_slice_nnz) max_slice_nnz = nnz_in_slice;
+        num_slices++;
+    }
+
     // Create dense vector using cudaMallocManaged
     double *v;
     cudaMallocManaged(&v, cols*sizeof(double));
@@ -160,10 +219,10 @@ int main(int argc, char *argv[]) {
     cudaMallocManaged(&C, rows*sizeof(double));
     
     // Perform SpMV
-    int N = values;
+    // Use a warp per slice
     int threadsPerBlock = 256;
-    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
-    int sharedMemSize = cols*sizeof(double);
+    int blocksPerGrid = num_slices;
+    int sharedMemSize = max_slice_nnz * (sizeof(double) + sizeof(int));
 
     first = 1;
 
@@ -185,10 +244,15 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(start);
 
-        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values);
+        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values, Aslices);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
+
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            printf("CUDA error after kernel launch: %s\n", cudaGetErrorString(err));
+        }
         
         // Ensure all operations are completed
         cudaDeviceSynchronize();

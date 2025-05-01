@@ -76,10 +76,11 @@ void sort(int* Arows, int* Acols, double* Avals, int n) {
     }
 }
 
-double calculateBandwidthGBs(int values, int rows, double timeMs) {
+double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
     double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-    double vector_size = rows * sizeof(double); // Dense vector size in bytes
-    double bytesAccessed = COO_size + vector_size;
+    double vector_size = cols * sizeof(double); // Dense vector size in bytes
+    double output_size = rows * sizeof(double); // Output vector size in bytes
+    double bytesAccessed = COO_size + vector_size + output_size;
 
     // Convert ms to seconds and bytes to GB
     double timeS = timeMs * 1e-3;
@@ -87,7 +88,6 @@ double calculateBandwidthGBs(int values, int rows, double timeMs) {
     
     return dataGB / timeS;
 }
-
 int ITERATIONS = 10;
 
 int main(int argc, char *argv[]) {
@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / ITERATIONS;
     printf("Average time: %fms\n", avg_time);
-    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, avg_time));
+    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
 
     fclose(fin);
     

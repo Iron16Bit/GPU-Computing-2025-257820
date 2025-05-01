@@ -2,19 +2,36 @@
 #include <stdio.h>
 #include <string.h>
 
+// Algorithm 2 from https://www.sciencedirect.com/science/article/pii/S1877050912001287
+// Simple thread-per-value implementation with the addition of in-kenel reductions
+
 __global__
 void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    extern __shared__ double sharedData[];
-
-    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
-        sharedData[i] = v[i];
-    }
-    __syncthreads();
+    int lane = threadIdx.x % 32;
 
     if (tid < values) {
-        double product = Avals[tid] * sharedData[Acols[tid]];
-        atomicAdd(&C[Arows[tid]], product);
+        // Compute current thread product
+        int row = Arows[tid];
+        double val = Avals[tid];
+        int col = Acols[tid];
+        double prod = val * v[col];
+
+
+        // Perform reduction within the warp
+        for (int offset = 1; offset < 32; offset *= 2) {
+            int neighbor_row = __shfl_up_sync(0xffffffff, row, offset);
+            double neighbor_prod = __shfl_up_sync(0xffffffff, prod, offset);
+            if (lane >= offset && row == neighbor_row) {
+                prod += neighbor_prod;
+            }
+        }
+
+        // Write the result to the output vector
+        int next_row = __shfl_down_sync(0xffffffff, row, 1);
+        if (lane == 31 || row != next_row) {
+            atomicAdd(&C[row], prod);
+        }
     }
 }
 
@@ -163,7 +180,6 @@ int main(int argc, char *argv[]) {
     int N = values;
     int threadsPerBlock = 256;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
-    int sharedMemSize = cols*sizeof(double);
 
     first = 1;
 
@@ -185,7 +201,7 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(start);
 
-        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values);
+        spmv<<<blocksPerGrid, threadsPerBlock>>>(Arows, Acols, Avals, v, C, rows, cols, values);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
