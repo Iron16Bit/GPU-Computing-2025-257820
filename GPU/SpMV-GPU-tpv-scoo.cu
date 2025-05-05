@@ -2,11 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
-// Based on Algorithm 3 from https://www.sciencedirect.com/science/article/pii/S1877050912001287
-// And https://medium.com/analytics-vidhya/sparse-matrix-vector-multiplication-with-cuda-42d191878e8f
-// thread-per-slice implementation with:
-// - 32 bits per slice
-// - slice = consecutive rows that can fit in shared memory
+// Adjusted constant for your GPU (which has 48KB shared memory)
+#define OPTIMAL_SHARED_MEM_USAGE 49152  // Use ~48 KB (maximum for your GPU)
 
 __global__
 void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values, int *Aslices) {
@@ -17,7 +14,7 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
     int slice_end = Aslices[slice_id + 1];
     int slice_nnz = slice_end - slice_start;
 
-    // Shared memory layout: first slice_nnz doubles, then slice_nnz ints
+    // Shared memory layout - only using two arrays
     extern __shared__ char shared[];
     double* sdata = (double*)shared;
     int* srows = (int*)&sdata[slice_nnz];
@@ -26,10 +23,11 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
     for (int i = tid; i < slice_nnz; i += blockDim.x) {
         int idx = slice_start + i;
         srows[i] = Arows[idx];
-        sdata[i] = Avals[idx] * v[Acols[idx]];
+        sdata[i] = Avals[idx] * v[Acols[idx]]; // Direct access to global v
     }
     __syncthreads();
 
+    // Reduction phase: accumulate results by row
     for (int i = tid; i < slice_nnz; i += blockDim.x) {
         // Only the last occurrence of a row in the slice writes the sum
         if (i == slice_nnz - 1 || srows[i] != srows[i + 1]) {
@@ -110,7 +108,6 @@ double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
 
 // GLOBAL VARIABLES
 int ITERATIONS = 11;
-int SHAREDMEM = 1024;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -178,34 +175,63 @@ int main(int argc, char *argv[]) {
     // Sort COO
     sort(Arows, Acols, Avals, values);
 
-    // Build SCOO from COO
-    // We want to save the beginning of each slice
-    // In a slice we want the consecutive rows whose nnz can fit in shared memory
+    // Build SCOO format adjusted for actual GPU shared memory
     int *Aslices;
     int num_slices = 0;
-    int max_slice_nnz = 0;
-    // Allocate worst-case space for Aslices (at most values+1 slices)
+    
+    // Get device properties first to determine shared memory limit
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, 0);
+    int SHARED_MEM_SIZE = deviceProp.sharedMemPerBlock;
+    
+    printf("Device shared memory per block: %d bytes\n", SHARED_MEM_SIZE);
+    
+    // Use slightly less than the maximum (leave room for register spilling)
+    SHARED_MEM_SIZE = (int)(SHARED_MEM_SIZE * 0.95);
+    
+    // Calculate maximum elements per slice that will fit in shared memory
+    int MAX_NNZ_PER_SLICE = SHARED_MEM_SIZE / (sizeof(double) + sizeof(int));
+    printf("Maximum NNZ per slice: %d\n", MAX_NNZ_PER_SLICE);
+    
+    // Allocate worst-case space for Aslices
     cudaMallocManaged(&Aslices, (values + 1) * sizeof(int));
 
     int nnz_in_slice = 0;
+    int max_slice_nnz = 0;
     Aslices[0] = 0;
     num_slices = 1;
+
+    // Create slices that fit in shared memory
     for (int i = 0; i < values; ++i) {
         nnz_in_slice++;
         bool next_is_new_row = (i < values - 1 && Arows[i] != Arows[i + 1]);
-        if (nnz_in_slice >= SHAREDMEM && next_is_new_row) {
+
+        // Create a new slice if:
+        // 1. Current slice is near capacity AND we're at a row boundary
+        // 2. Or we're absolutely at capacity
+        if ((nnz_in_slice >= MAX_NNZ_PER_SLICE * 0.9 && next_is_new_row) || 
+            (nnz_in_slice >= MAX_NNZ_PER_SLICE)) {
             Aslices[num_slices] = i + 1;
             if (nnz_in_slice > max_slice_nnz) max_slice_nnz = nnz_in_slice;
             nnz_in_slice = 0;
             num_slices++;
         }
     }
+
     // Ensure the last slice ends at the last element
     if (Aslices[num_slices - 1] != values) {
         Aslices[num_slices] = values;
         if (nnz_in_slice > max_slice_nnz) max_slice_nnz = nnz_in_slice;
         num_slices++;
     }
+
+    // Calculate shared memory size 
+    int sharedMemSize = max_slice_nnz * sizeof(double)  // For sdata
+                      + max_slice_nnz * sizeof(int);    // For srows
+    
+    printf("Sliced matrix into %d slices, max slice size: %d NNZ\n", 
+           num_slices, max_slice_nnz);
+    printf("Using shared memory size: %d bytes per block\n", sharedMemSize);
 
     // Create dense vector using cudaMallocManaged
     double *v;
@@ -220,9 +246,8 @@ int main(int argc, char *argv[]) {
     
     // Perform SpMV
     // Use a warp per slice
-    int threadsPerBlock = 256;
+    int threadsPerBlock = 256;  // A30 supports up to 1024, but 256 is often optimal
     int blocksPerGrid = num_slices;
-    int sharedMemSize = max_slice_nnz * (sizeof(double) + sizeof(int));
 
     first = 1;
 
