@@ -35,46 +35,20 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void swap(int* Arows, int* Acols, double* Avals, int i, int j) {
-    int tmp_row = Arows[i];
-    int tmp_col = Acols[i];
-    double tmp_val = Avals[i];
+// double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
+//     double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
+//     double vector_size = cols * sizeof(double); // Dense vector size in bytes
+//     double output_size = rows * sizeof(double); // Output vector size in bytes
+//     double bytesAccessed = COO_size + vector_size + output_size;
 
-    Arows[i] = Arows[j];
-    Acols[i] = Acols[j];
-    Avals[i] = Avals[j];
-
-    Arows[j] = tmp_row;
-    Acols[j] = tmp_col;
-    Avals[j] = tmp_val;
-}
-
-void sort(int* Arows, int* Acols, double* Avals, int n) {
-    for (int i=0; i<n-1; i++) {
-        for (int j=i+1; j<n; j++) {
-            if (Arows[i] > Arows[j]) {
-                swap(Arows, Acols, Avals, i, j);
-            } else if ((Arows[i] == Arows[j]) && (Acols[i] > Acols[j])) {
-                swap(Arows, Acols, Avals, i, j);
-            }
-        }
-    }
-}
-
-double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
-    double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-    double vector_size = cols * sizeof(double); // Dense vector size in bytes
-    double output_size = rows * sizeof(double); // Output vector size in bytes
-    double bytesAccessed = COO_size + vector_size + output_size;
-
-    // Convert ms to seconds and bytes to GB
-    double timeS = timeMs * 1e-3;
-    double dataGB = bytesAccessed * 1e-9;
+//     // Convert ms to seconds and bytes to GB
+//     double timeS = timeMs * 1e-3;
+//     double dataGB = bytesAccessed * 1e-9;
     
-    return dataGB / timeS;
-}
+//     return dataGB / timeS;
+// }
 
-int ITERATIONS = 10;
+int ITERATIONS = 11;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -139,9 +113,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Sort COO
-    sort(Arows, Acols, Avals, values);
-
     // Create dense vector using cudaMallocManaged
     double *v;
     cudaMallocManaged(&v, cols*sizeof(double));
@@ -155,7 +126,7 @@ int main(int argc, char *argv[]) {
     
     // Perform SpMV
     int N = values;
-    int threadsPerBlock = 256;
+    int threadsPerBlock = 1024;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
     cudaEvent_t start, stop;
@@ -188,7 +159,11 @@ int main(int argc, char *argv[]) {
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
         printf("Kernel completed in %fms\n", e_time);
-        totalTime += e_time;
+        if (first == 1) {
+            first = 0;
+        } else {
+            totalTime += e_time;
+        }
 
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
@@ -196,9 +171,9 @@ int main(int argc, char *argv[]) {
     // print_double_array(C, rows);
 
     // Calculate average time
-    double avg_time = totalTime / ITERATIONS;
+    double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
+    // printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
 
     fclose(fin);
     

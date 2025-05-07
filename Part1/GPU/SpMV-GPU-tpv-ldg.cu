@@ -4,16 +4,11 @@
 
 __global__
 void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    int current_row = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (current_row < rows) {
-        for (int i=0; i<values; i++) {
-            if (Arows[i] == current_row) {
-                C[current_row] += (Avals[i] * v[Acols[i]]);
-            } else if (Arows[i] > current_row) {
-                break;
-            }
-        }
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid < values) {
+        double product = Avals[tid] * __ldg(&v[Acols[tid]]);
+        atomicAdd(&C[Arows[tid]], product);
     }
 }
 
@@ -54,32 +49,20 @@ void swap(int* Arows, int* Acols, double* Avals, int i, int j) {
     Avals[j] = tmp_val;
 }
 
-void sort(int* Arows, int* Acols, double* Avals, int n) {
-    for (int i=0; i<n-1; i++) {
-        for (int j=i+1; j<n; j++) {
-            if (Arows[i] > Arows[j]) {
-                swap(Arows, Acols, Avals, i, j);
-            } else if ((Arows[i] == Arows[j]) && (Acols[i] > Acols[j])) {
-                swap(Arows, Acols, Avals, i, j);
-            }
-        }
-    }
-}
+// double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
+//     size_t COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
+//     size_t vector_size = cols * sizeof(double); // Dense vector size in bytes
+//     size_t output_size = rows * sizeof(double); // Output vector size in bytes
+//     size_t bytesAccessed = COO_size + vector_size + output_size;
 
-double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
-    double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-    double vector_size = cols * sizeof(double); // Dense vector size in bytes
-    double output_size = rows * sizeof(double); // Output vector size in bytes
-    double bytesAccessed = COO_size + vector_size + output_size;
-
-    // Convert ms to seconds and bytes to GB
-    double timeS = timeMs * 1e-3;
-    double dataGB = bytesAccessed * 1e-9;
+//     // Convert ms to seconds and bytes to GB
+//     double timeS = timeMs * 1e-3;
+//     double dataGB = bytesAccessed * 1e-9;
     
-    return dataGB / timeS;
-}
+//     return dataGB / timeS;
+// }
 
-int ITERATIONS = 10;
+int ITERATIONS = 11;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -145,7 +128,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Sort COO
-    sort(Arows, Acols, Avals, values);
+    // sort(Arows, Acols, Avals, values);
 
     // Create dense vector using cudaMallocManaged
     double *v;
@@ -159,9 +142,11 @@ int main(int argc, char *argv[]) {
     cudaMallocManaged(&C, rows*sizeof(double));
     
     // Perform SpMV
-    int N = rows;
-    int threadsPerBlock = 256;
+    int N = values;
+    int threadsPerBlock = 1024;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+
+    first = 1;
 
     cudaEvent_t start, stop;
 
@@ -186,14 +171,15 @@ int main(int argc, char *argv[]) {
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         
-        // Ensure all operations are completed
-        cudaDeviceSynchronize();
-        
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
         printf("Kernel completed in %fms\n", e_time);
-        totalTime += e_time;
+        if (first == 1) {
+            first = 0;
+        } else {
+            totalTime += e_time;
+        }
 
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
@@ -201,9 +187,9 @@ int main(int argc, char *argv[]) {
     // print_double_array(C, rows);
 
     // Calculate average time
-    double avg_time = totalTime / ITERATIONS;
+    double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
+    // printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
 
     fclose(fin);
     

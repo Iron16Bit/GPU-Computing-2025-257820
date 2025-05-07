@@ -3,25 +3,41 @@
 #include <string.h>
 
 __global__
-void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values, int *rowOffsets) {
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
     int current_row = blockIdx.x * blockDim.x + threadIdx.x;
-    extern __shared__ double sharedData[];
-
-    // Copy vector to shared memory
-    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
-        sharedData[i] = v[i];
-    }
-    __syncthreads();
-
-    // Use row offsets to avoid scanning from the beginning
+    
     if (current_row < rows) {
-        int start = rowOffsets[current_row];
-        int end = (current_row < rows - 1) ? rowOffsets[current_row + 1] : values;
+        double sum = 0.0;
         
-        for (int i = start; i < end; i++) {
-            // All elements in this range belong to current_row, no need to check
-            C[current_row] += (Avals[i] * sharedData[Acols[i]]);
+        // Binary search to find the starting position for this row
+        int left = 0;
+        int right = values - 1;
+        int start_pos = values; // Default to end if row not found
+        
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+            if (Arows[mid] < current_row) {
+                left = mid + 1;
+            } else if (Arows[mid] > current_row) {
+                right = mid - 1;
+            } else {
+                // Found a match, but we need to find the first occurrence
+                start_pos = mid;
+                right = mid - 1;
+            }
         }
+        
+        // If no exact match found and left is valid, use it as start point
+        if (start_pos == values || Arows[start_pos] != current_row) {
+            start_pos = left;
+        }
+        
+        // Accumulate products for this row
+        for (int i = start_pos; i < values && Arows[i] == current_row; i++) {
+            sum += Avals[i] * __ldg(&v[Acols[i]]);
+        }
+        
+        C[current_row] = sum;
     }
 }
 
@@ -48,47 +64,20 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void swap(int* Arows, int* Acols, double* Avals, int i, int j) {
-    int tmp_row = Arows[i];
-    int tmp_col = Acols[i];
-    double tmp_val = Avals[i];
+// double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
+//     double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
+//     double vector_size = cols * sizeof(double); // Dense vector size in bytes
+//     double output_size = rows * sizeof(double); // Output vector size in bytes
+//     double bytesAccessed = COO_size + vector_size + output_size;
 
-    Arows[i] = Arows[j];
-    Acols[i] = Acols[j];
-    Avals[i] = Avals[j];
-
-    Arows[j] = tmp_row;
-    Acols[j] = tmp_col;
-    Avals[j] = tmp_val;
-}
-
-void sort(int* Arows, int* Acols, double* Avals, int n) {
-    for (int i=0; i<n-1; i++) {
-        for (int j=i+1; j<n; j++) {
-            if (Arows[i] > Arows[j]) {
-                swap(Arows, Acols, Avals, i, j);
-            } else if ((Arows[i] == Arows[j]) && (Acols[i] > Acols[j])) {
-                swap(Arows, Acols, Avals, i, j);
-            }
-        }
-    }
-}
-
-double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
-    double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-    double vector_size = cols * sizeof(double); // Dense vector size in bytes
-    double output_size = rows * sizeof(double); // Output vector size in bytes
-    double rowOffsets_size = (rows + 1) * sizeof(int);
-    double bytesAccessed = COO_size + vector_size + output_size + rowOffsets_size;
-
-    // Convert ms to seconds and bytes to GB
-    double timeS = timeMs * 1e-3;
-    double dataGB = bytesAccessed * 1e-9;
+//     // Convert ms to seconds and bytes to GB
+//     double timeS = timeMs * 1e-3;
+//     double dataGB = bytesAccessed * 1e-9;
     
-    return dataGB / timeS;
-}
+//     return dataGB / timeS;
+// }
 
-int ITERATIONS = 10;
+int ITERATIONS = 11;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -153,35 +142,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Sort COO
-    sort(Arows, Acols, Avals, values);
-
-    // After sorting the COO data, build row offsets array
-    int *rowOffsets;
-    cudaMallocManaged(&rowOffsets, (rows + 1) * sizeof(int));
-    
-    // Initialize all offsets to -1 (meaning no elements for that row)
-    for (int i = 0; i < rows + 1; i++) {
-        rowOffsets[i] = -1;
-    }
-    
-    // Set the offset for each row to the first occurrence of that row
-    for (int i = 0; i < values; i++) {
-        if (rowOffsets[Arows[i]] == -1) {
-            rowOffsets[Arows[i]] = i;
-        }
-    }
-    
-    // Fill in any rows that don't have elements with the next valid offset
-    int lastValidOffset = values;
-    for (int i = rows - 1; i >= 0; i--) {
-        if (rowOffsets[i] == -1) {
-            rowOffsets[i] = lastValidOffset;
-        } else {
-            lastValidOffset = rowOffsets[i];
-        }
-    }
-
     // Create dense vector using cudaMallocManaged
     double *v;
     cudaMallocManaged(&v, cols*sizeof(double));
@@ -195,9 +155,8 @@ int main(int argc, char *argv[]) {
     
     // Perform SpMV
     int N = rows;
-    int threadsPerBlock = 256;
+    int threadsPerBlock = 1024;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
-    int sharedMemSize = cols*sizeof(double);
 
     cudaEvent_t start, stop;
 
@@ -206,7 +165,7 @@ int main(int argc, char *argv[]) {
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
         
-        // Prefetch data to GPU including row offsets
+        // Prefetch data to GPU
         int device = -1;
         cudaGetDevice(&device);
         cudaMemPrefetchAsync(Arows, values*sizeof(int), device, NULL);
@@ -214,10 +173,10 @@ int main(int argc, char *argv[]) {
         cudaMemPrefetchAsync(Avals, values*sizeof(double), device, NULL);
         cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
         cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
-        cudaMemPrefetchAsync(rowOffsets, (rows+1)*sizeof(int), device, NULL);
-
+        
         cudaEventRecord(start);
-        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(Arows, Acols, Avals, v, C, rows, cols, values, rowOffsets);
+
+        spmv<<<blocksPerGrid, threadsPerBlock>>>(Arows, Acols, Avals, v, C, rows, cols, values);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
@@ -227,17 +186,23 @@ int main(int argc, char *argv[]) {
         
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
+        // print_double_array(C, rows);
         printf("Kernel completed in %fms\n", e_time);
-        totalTime += e_time;
+        if (first == 1) {
+            first = 0;
+        } else {
+            totalTime += e_time;
+        }
 
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
     }
+    // print_double_array(C, rows);
 
     // Calculate average time
     double avg_time = totalTime / ITERATIONS;
     printf("Average time: %fms\n", avg_time);
-    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
+    // printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
 
     fclose(fin);
     
@@ -247,7 +212,6 @@ int main(int argc, char *argv[]) {
     cudaFree(Avals);
     cudaFree(v);
     cudaFree(C);
-    cudaFree(rowOffsets);
 
     return 0;
 }
