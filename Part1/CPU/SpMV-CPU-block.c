@@ -26,27 +26,38 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void block_matrix_multiplication(double *M, double* v, double *C, int cols, int row_block, int col_block, int iteration) {
-    int c_offset = iteration / (cols/col_block) * row_block;
-    int v_offset = iteration % (cols/col_block) * col_block;
-    int m_offset = c_offset * col_block + v_offset;
-
-    for (int i=0; i<row_block; i++) {
-        for (int j=0; j<1; j++) {
-            for (int k=0; k<col_block; k++) {
-                C[c_offset + i] += M[m_offset + i * cols + k] * v[v_offset + k];
+void block_matrix_multiplication(double *M, double* v, double *C, int cols, int rows, int BLOCK_SIZE, int iteration) {
+    // Calculate how many blocks we have per row
+    int blocks_per_row = (cols + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    
+    // Get block row and column indices
+    int block_row = iteration / blocks_per_row;
+    int block_col = iteration % blocks_per_row;
+    
+    // Calculate starting positions for the block
+    int row_start = block_row * BLOCK_SIZE;
+    int col_start = block_col * BLOCK_SIZE;
+    
+    // Process the block
+    for (int i = 0; i < BLOCK_SIZE; i++) {
+        if (row_start + i >= rows) {
+            continue;
+        }
+        double sum = 0.0;
+        for (int k = 0; k < BLOCK_SIZE; k++) {
+            if (col_start + k >= cols) {
+                continue;
             }
+            sum += M[(row_start + i) * cols + (col_start + k)] * v[col_start + k];
         }
+        
+        // Add to the result vector
+        C[row_start + i] += sum;
     }
 }
 
-int best_block(int n) {
-    for (int i=n-1; i>=0; i--) {
-        if (n%i == 0) {
-            return i;
-        }
-    }
-}
+int ITERATIONS = 51;
+int BLOCK_SIZE = 128;
 
 int main(int argc, char *argv[]) {
     FILE *fin = fopen(argv[1], "r");
@@ -109,28 +120,39 @@ int main(int argc, char *argv[]) {
     for (int i=0; i<cols; i++) {
         v[i] = 1.0;
     }
-    
-    // Block-based approach
-    // Find block sizes
-    int row_block = best_block(rows);
-    int col_block = best_block(cols);
 
     double *M = (double *)malloc(rows*cols*sizeof(double));
     double *C = (double *)malloc(rows*sizeof(double));
     memset(M, 0, rows*cols*sizeof(double));
-    memset(C, 0, rows*sizeof(double));
-    TIMER_DEF(var);
-    TIMER_START(var);
+
     // COO -> Matrix
     for(int i=0; i<values; i++) {
         M[Arows[i]*cols+Acols[i]] = Avals[i];
     }
-    // Perform block-based matrix multiplication
-    for (int i=0; i<(rows*cols)/(row_block*col_block); i++) {
-        block_matrix_multiplication(M, v, C, cols, row_block, col_block, i);
+
+    float total_time = 0.0;
+
+    for (int i=0; i<ITERATIONS; i++) {
+        memset(C, 0, rows*sizeof(double));
+        TIMER_DEF(var);
+        TIMER_START(var);
+
+        int blocks_per_row = (cols + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        int blocks_per_col = (rows + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        int total_blocks = blocks_per_row * blocks_per_col;
+
+        for (int i = 0; i < total_blocks; i++) {
+            block_matrix_multiplication(M, v, C, cols, rows, BLOCK_SIZE, i);
+        }
+
+        TIMER_STOP(var);
+        // printf("[CPU block] Elapsed time: %fms\n", TIMER_ELAPSED(var));
+        if (i != 0) {
+            total_time += TIMER_ELAPSED(var);
+        }
     }
-    TIMER_STOP(var);
-    printf("[CPU block] Elapsed time: %f\n", TIMER_ELAPSED(var));
+    printf("[CPU block] Average time: %fms\n", total_time / (ITERATIONS-1));
+    // print_double_array(C, rows);
 
     fclose(fin);
 

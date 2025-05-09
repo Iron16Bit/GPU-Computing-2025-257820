@@ -32,6 +32,8 @@ void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, dou
     }
 }
 
+#define ITERATIONS 51
+
 int main(int argc, char *argv[]) {
     FILE *fin = fopen(argv[1], "r");
 
@@ -95,13 +97,24 @@ int main(int argc, char *argv[]) {
     }
 
     double *C = (double *)malloc(rows*sizeof(double));
-    memset(C, 0, rows*sizeof(double));
-    TIMER_DEF(var);
-    TIMER_START(var);
-    matrix_multiplication(Arows, Acols, Avals, v, C, rows, cols, values); 
+    first = 1;
+    double tot_time = 0.0;
 
-    TIMER_STOP(var);
-    printf("[CPU coo] Elapsed time: %f\n", TIMER_ELAPSED(var));
+    for(int i=0; i<ITERATIONS; i++) {
+        memset(C, 0, rows*sizeof(double));
+        TIMER_DEF(var);
+        TIMER_START(var);
+        matrix_multiplication(Arows, Acols, Avals, v, C, rows, cols, values); 
+
+        TIMER_STOP(var);
+        // printf("[CPU coo] Elapsed time: %f\n", TIMER_ELAPSED(var));
+        if (first == 1) {
+            first = 0;
+        } else {
+            tot_time += TIMER_ELAPSED(var);
+        }
+    }
+    printf("[CPU coo] Elapsed time: %fms\n", tot_time / (ITERATIONS-1));
 
     fclose(fin);
 

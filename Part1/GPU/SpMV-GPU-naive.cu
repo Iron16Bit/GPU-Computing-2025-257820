@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <cuda_runtime.h>
 
 void print_int_array(int* a, int n) {
     for (int i=0; i<n; i++) {
@@ -26,7 +25,6 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-// CUDA kernel - each thread computes one multiplication
 __global__
 void matrix_multiplication_kernel(double *A, double *B, double *C, int rows, int cols) {
     // Calculate global thread ID in a 2D grid
@@ -37,24 +35,12 @@ void matrix_multiplication_kernel(double *A, double *B, double *C, int rows, int
     if (row < rows && col < cols) {
         // Compute one multiplication and add atomically to result
         double product = A[row * cols + col] * B[col];
-        if (product != 0.0) { // Only add non-zero contributions
-            atomicAdd(&C[row], product);
-        }
+        atomicAdd(&C[row], product);
     }
 }
 
-double calculateBandwidthGBs(int rows, int cols, double timeMs) {
-    double matrix_size = rows * cols * sizeof(double); // Dense matrix size
-    double vector_size = cols * sizeof(double); // Vector size
-    double output_size = rows * sizeof(double); // Output vector size
-    double bytesAccessed = matrix_size + vector_size + output_size;
-
-    // Convert ms to seconds and bytes to GB
-    double timeS = timeMs * 1e-3;
-    double dataGB = bytesAccessed * 1e-9;
-    
-    return dataGB / timeS;
-}
+#define ITERATIONS 51
+#define SQUARED_BLOCK_SIZE 16
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -132,7 +118,8 @@ int main(int argc, char *argv[]) {
     
     // Initialize memory
     cudaMemset(M, 0, rows*cols*sizeof(double));
-    cudaMemset(C, 0, rows*sizeof(double));
+
+    double totalTime = 0.0;
     
     // Convert COO to dense format
     for(int i=0; i<values; i++) {
@@ -141,7 +128,7 @@ int main(int argc, char *argv[]) {
     
     // Perform GPU matrix-vector multiplication
     // Set up 2D grid to match matrix dimensions
-    dim3 threadsPerBlock(16, 16);  // 16x16 = 256 threads per block
+    dim3 threadsPerBlock(SQUARED_BLOCK_SIZE, SQUARED_BLOCK_SIZE);
     dim3 numBlocks(
         (cols + threadsPerBlock.x - 1) / threadsPerBlock.x,
         (rows + threadsPerBlock.y - 1) / threadsPerBlock.y
@@ -149,38 +136,39 @@ int main(int argc, char *argv[]) {
     
     // Setup timing
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
-    // Prefetch data to GPU
-    int device = -1;
-    cudaGetDevice(&device);
-    cudaMemPrefetchAsync(M, rows*cols*sizeof(double), device, NULL);
-    cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
-    cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
-    
-    // Run kernel with timing
-    cudaEventRecord(start);
-    matrix_multiplication_kernel<<<numBlocks, threadsPerBlock>>>(M, v, C, rows, cols);
-    cudaEventRecord(stop);
-    
-    // Wait for kernel to complete
-    cudaEventSynchronize(stop);
-    cudaDeviceSynchronize();
-    
-    // Calculate elapsed time
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    
-    printf("[GPU naive] Elapsed time: %f ms\n", milliseconds);
-    printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(rows, cols, milliseconds));
-    
-    // Cleanup events
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    
-    print_double_array(C, rows);
-    
+
+    for (int i=0; i<ITERATIONS; i++) {
+        cudaMemset(C, 0, rows*sizeof(double));
+
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        
+        // Run kernel with timing
+        cudaEventRecord(start);
+        matrix_multiplication_kernel<<<numBlocks, threadsPerBlock>>>(M, v, C, rows, cols);
+        cudaEventRecord(stop);
+        
+        // Wait for kernel to complete
+        cudaEventSynchronize(stop);
+        
+        // Calculate elapsed time
+        float milliseconds = 0;
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        
+        printf("[GPU naive] Elapsed time: %f ms\n", milliseconds);
+        if (first == 1) {
+            first = 0;
+        } else {
+            totalTime += milliseconds;
+        }
+        
+        // Cleanup events
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+    double avg_time = totalTime / (ITERATIONS - 1);
+    printf("Average time: %fms\n", avg_time);
+
     fclose(fin);
 
     // Free using cudaFree

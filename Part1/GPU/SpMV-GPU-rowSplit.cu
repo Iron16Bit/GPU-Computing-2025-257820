@@ -77,7 +77,7 @@ void print_matrix(double* m, int rows, int cols) {
 //     return dataGB / timeS;
 // }
 
-int ITERATIONS = 11;
+int ITERATIONS = 51;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -155,8 +155,10 @@ int main(int argc, char *argv[]) {
     
     // Perform SpMV
     int N = rows;
-    int threadsPerBlock = 1024;
+    int threadsPerBlock = 256;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+
+    first = 1;
 
     cudaEvent_t start, stop;
 
@@ -165,24 +167,12 @@ int main(int argc, char *argv[]) {
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
         
-        // Prefetch data to GPU
-        int device = -1;
-        cudaGetDevice(&device);
-        cudaMemPrefetchAsync(Arows, values*sizeof(int), device, NULL);
-        cudaMemPrefetchAsync(Acols, values*sizeof(int), device, NULL);
-        cudaMemPrefetchAsync(Avals, values*sizeof(double), device, NULL);
-        cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
-        cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
-        
         cudaEventRecord(start);
 
         spmv<<<blocksPerGrid, threadsPerBlock>>>(Arows, Acols, Avals, v, C, rows, cols, values);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
-        
-        // Ensure all operations are completed
-        cudaDeviceSynchronize();
         
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);

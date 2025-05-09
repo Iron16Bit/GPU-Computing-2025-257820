@@ -36,6 +36,8 @@ void matrix_multiplication(double *A, double *B, double *C, int rows, int cols) 
     }
 }
 
+#define ITERATIONS 51
+
 int main(int argc, char *argv[]) {
     FILE *fin = fopen(argv[1], "r");
 
@@ -102,16 +104,28 @@ int main(int argc, char *argv[]) {
     double *M = (double *)malloc(rows*cols*sizeof(double));
     double *C = (double *)malloc(rows*sizeof(double));
     memset(M, 0, rows*cols*sizeof(double));
-    memset(C, 0, rows*sizeof(double));
-    TIMER_DEF(var);
-    TIMER_START(var);
-    for(int i=0; i<values; i++) {
-        M[Arows[i]*cols+Acols[i]] = Avals[i];
+
+    first = 1;
+    double tot_time = 0.0;
+
+    for (int i=0; i<ITERATIONS; i++) {
+        memset(C, 0, rows*sizeof(double));
+        TIMER_DEF(var);
+        TIMER_START(var);
+        for(int i=0; i<values; i++) {
+            M[Arows[i]*cols+Acols[i]] = Avals[i];
+        }
+        // Perform matrix multiplication
+        matrix_multiplication(M, v, C, rows, cols);
+        TIMER_STOP(var);
+        // printf("[CPU naive] Elapsed time: %f\n", TIMER_ELAPSED(var));
+        if (first == 1) {
+            first = 0;
+        } else {
+            tot_time += TIMER_ELAPSED(var);
+        }
     }
-    // Perform matrix multiplication
-    matrix_multiplication(M, v, C, rows, cols);
-    TIMER_STOP(var);
-    printf("[CPU naive] Elapsed time: %f\n", TIMER_ELAPSED(var));
+    printf("[CPU naive] Average time: %fms\n", tot_time / (ITERATIONS-1));
     
     // double *C1 = (double *)malloc(rows*sizeof(double));
     // cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, rows, 1, cols, 1.0, M, cols, v, 1, 0.0, C1, 1);  

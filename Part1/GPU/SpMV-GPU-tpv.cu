@@ -131,19 +131,12 @@ int main(int argc, char *argv[]) {
 
     cudaEvent_t start, stop;
 
+    first = 1;
+
     for (int i=0; i<ITERATIONS; i++) {
         cudaMemset(C, 0, rows * sizeof(double));
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
-        
-        // Prefetch data to GPU
-        int device = -1;
-        cudaGetDevice(&device);
-        cudaMemPrefetchAsync(Arows, values*sizeof(int), device, NULL);
-        cudaMemPrefetchAsync(Acols, values*sizeof(int), device, NULL);
-        cudaMemPrefetchAsync(Avals, values*sizeof(double), device, NULL);
-        cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
-        cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
         
         cudaEventRecord(start);
 
@@ -151,9 +144,6 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
-        
-        // Ensure all operations are completed
-        cudaDeviceSynchronize();
         
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
@@ -168,7 +158,7 @@ int main(int argc, char *argv[]) {
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
     }
-    // print_double_array(C, rows);
+    print_double_array(C, rows);
 
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
