@@ -43,11 +43,6 @@ check_data:
         echo "Data folder exists and contains files. Skipping download."; \
     fi
 
-# Load required modules
-load_modules:
-	@echo "Loading required modules..."
-	@bash $(SCRIPTS_FOLDER)/module_load.sh
-
 # Build all CPU and GPU programs
 build_all: $(CPU_BINS) $(GPU_BINS)
 
@@ -59,7 +54,7 @@ $(CPU_BIN_FOLDER)/%: $(CPU_FOLDER)/%.c $(TIME_LIB_OBJ)
 # Compile each GPU binary
 $(GPU_BIN_FOLDER)/%.exec: $(GPU_FOLDER)/%.cu
 	@mkdir -p "$(GPU_BIN_FOLDER)"
-	$(NVCC) $(GPU_ARCH) -m64 -o $@ $<
+	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $<
 
 # Compile timing library object
 $(TIME_LIB_OBJ): $(SRC_FOLDER)/my_time_lib.c
