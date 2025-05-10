@@ -40,13 +40,27 @@ void matrix_multiplication_kernel(double *A, double *B, double *C, int rows, int
 }
 
 #define ITERATIONS 51
-#define SQUARED_BLOCK_SIZE 16
+#define DEFAULT_BLOCK_SIZE 16
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
+    // Parse command line arguments
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "Usage: %s <input_file> [block_size]\n", argv[0]);
         return 1;
     }
+    
+    // Set block size from command line or use default
+    int SQUARED_BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    if (argc == 3) {
+        int user_block_size = atoi(argv[2]);
+        if (user_block_size > 0) {
+            SQUARED_BLOCK_SIZE = user_block_size;
+        } else {
+            fprintf(stderr, "Warning: Invalid block size, using default (%d)\n", DEFAULT_BLOCK_SIZE);
+        }
+    }
+    
+    printf("Using block size: %d\n", SQUARED_BLOCK_SIZE);
     
     FILE *fin = fopen(argv[1], "r");
     if (!fin) {
@@ -137,6 +151,8 @@ int main(int argc, char *argv[]) {
     // Setup timing
     cudaEvent_t start, stop;
 
+    first = 1;  // Reset first flag for timing loop
+    
     for (int i=0; i<ITERATIONS; i++) {
         cudaMemset(C, 0, rows*sizeof(double));
 

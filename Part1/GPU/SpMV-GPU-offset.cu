@@ -53,14 +53,39 @@ void print_matrix(double* m, int rows, int cols) {
 // }
 
 #define ITERATIONS 51
-#define THREADS 256
-#define BLOCKS 4
+#define DEFAULT_THREADS 256
+#define DEFAULT_BLOCKS 4
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
+    if (argc < 2 || argc > 4) {
+        fprintf(stderr, "Usage: %s <input_file> [num_threads] [num_blocks]\n", argv[0]);
         return 1;
     }
+
+    int THREADS = DEFAULT_THREADS;
+    int BLOCKS = DEFAULT_BLOCKS;
+
+    // Parse threads parameter
+    if (argc >= 3) {
+        int user_threads = atoi(argv[2]);
+        if (user_threads > 0) {
+            THREADS = user_threads;
+        } else {
+            fprintf(stderr, "Warning: Invalid number of threads, using default (%d)\n", DEFAULT_THREADS);
+        }
+    }
+
+    // Parse blocks parameter
+    if (argc >= 4) {
+        int user_blocks = atoi(argv[3]);
+        if (user_blocks > 0) {
+            BLOCKS = user_blocks;
+        } else {
+            fprintf(stderr, "Warning: Invalid number of blocks, using default (%d)\n", DEFAULT_BLOCKS);
+        }
+    }
+
+    printf("Using configuration: %d threads per block, %d blocks\n", THREADS, BLOCKS);
 
     FILE *fin = fopen(argv[1], "r");
 
