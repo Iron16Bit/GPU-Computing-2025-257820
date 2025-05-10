@@ -15,4 +15,6 @@ fi
 for file in "$DATA_DIR"/*.mtx; do
     echo "Sorting $file..."
     "$SORT_BIN" "$file"
+    # Remove original file
+    rm "$file"
 done

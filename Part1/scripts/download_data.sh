@@ -10,8 +10,8 @@ urls=(
     "https://suitesparse-collection-website.herokuapp.com/MM/HB/gemat11.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/GHS_psdef/gridgena.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/VanVelzen/Zd_Jac3_db.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/MAWI/mawi_201512012345.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/Janna/ML_Geer.tar.gz"
+    # "https://suitesparse-collection-website.herokuapp.com/MM/MAWI/mawi_201512012345.tar.gz"
+    # "https://suitesparse-collection-website.herokuapp.com/MM/Janna/ML_Geer.tar.gz"
 )
 
 # Make sure Data directory exists

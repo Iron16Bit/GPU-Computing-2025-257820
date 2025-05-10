@@ -14,7 +14,8 @@ GPU_FOLDER := GPU
 CPU_BIN_FOLDER := $(BIN_FOLDER)/CPU
 GPU_BIN_FOLDER := $(BIN_FOLDER)/GPU
 BATCH_OUT_FOLDER := outputs
-SLURM_SCRIPTS_FOLDER := slurm_scripts
+DATA_FOLDER := Data
+SCRIPTS_FOLDER := scripts
 
 # Timing library object
 TIME_LIB_OBJ := $(OBJ_FOLDER)/my_time_lib.o
@@ -29,8 +30,26 @@ GPU_SRCS := $(wildcard $(GPU_FOLDER)/*.cu)
 # Create a matching list of GPU binaries
 GPU_BINS := $(patsubst $(GPU_FOLDER)/%.cu, $(GPU_BIN_FOLDER)/%.exec, $(GPU_SRCS))
 
-# Default target builds all CPU and GPU programs
-all: $(CPU_BINS) $(GPU_BINS)
+# Default target checks for data, loads modules, then builds all
+all: check_data load_modules build_all
+
+# Check if Data folder exists and download/sort data if needed
+check_data:
+	@if [ ! -d "$(DATA_FOLDER)" ] || [ -z "$$(ls -A $(DATA_FOLDER) 2>/dev/null)" ]; then \
+        echo "Data folder missing or empty. Downloading and processing data..."; \
+        bash $(SCRIPTS_FOLDER)/download_data.sh; \
+        bash $(SCRIPTS_FOLDER)/sort_files.sh; \
+    else \
+        echo "Data folder exists and contains files. Skipping download."; \
+    fi
+
+# Load required modules
+load_modules:
+	@echo "Loading required modules..."
+	@bash $(SCRIPTS_FOLDER)/module_load.sh
+
+# Build all CPU and GPU programs
+build_all: $(CPU_BINS) $(GPU_BINS)
 
 # Compile each CPU binary with the time lib
 $(CPU_BIN_FOLDER)/%: $(CPU_FOLDER)/%.c $(TIME_LIB_OBJ)
@@ -56,6 +75,5 @@ clean:
 	rm -rf $(BIN_FOLDER)
 	rm -rf $(OBJ_FOLDER)
 
-# Clean SLURM scripts
-clean-slurm:
-	rm -rf $(SLURM_SCRIPTS_FOLDER)
+# Mark phony targets that don't create files
+.PHONY: all check_data load_modules build_all clean clean_batch_outputs
