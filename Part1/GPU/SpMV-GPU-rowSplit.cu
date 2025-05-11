@@ -34,7 +34,7 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
         
         // Accumulate products for this row
         for (int i = start_pos; i < values && Arows[i] == current_row; i++) {
-            sum += Avals[i] * __ldg(&v[Acols[i]]);
+            sum += Avals[i] * v[Acols[i]];
         }
         
         C[current_row] = sum;

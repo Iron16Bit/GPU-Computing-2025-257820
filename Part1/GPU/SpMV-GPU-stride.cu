@@ -7,7 +7,7 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (tid < values) {
-        int total_threads = gridDim.x * blockDim.x;
+        int total_threads = gridDim.x * blockDim.x; // We stride of gridSize * blockSize
 
         for (int i=tid; i<values; i+=total_threads) {
             double product = Avals[i] * v[Acols[i]];

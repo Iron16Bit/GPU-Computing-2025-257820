@@ -27,32 +27,31 @@ void print_matrix(double* m, int rows, int cols) {
 }
 
 void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    if (values == 0) return;
+    // Initialize result vector to zeros (this is already done in main())
+    // memset(C, 0, rows * sizeof(double));
     
     int i = 0;
     while (i < values) {
         int row = Arows[i];
         double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
         
-        // Process current row in chunks of 4
-        for (; i < values && Arows[i] == row; i += 4) {
+        // Process all elements in the current row
+        while (i < values && Arows[i] == row) {
+            // Process 4 elements at a time if we don't spill to the next row
             if (i + 3 < values && Arows[i+3] == row) {
-                // We don't spill to the next row, we can process 4 elements at once
                 sum0 += Avals[i] * v[Acols[i]];
                 sum1 += Avals[i+1] * v[Acols[i+1]];
                 sum2 += Avals[i+2] * v[Acols[i+2]];
                 sum3 += Avals[i+3] * v[Acols[i+3]];
-            }
-            else {
-                // Process remaining elements one by one
-                for (int j = 0; j < 4 && i+j < values && Arows[i+j] == row; j++) {
-                    sum0 += Avals[i+j] * v[Acols[i+j]];
-                }
-                // Advance to the next row
-                while (i < values && Arows[i] == row) i++;
+                i += 4;
+            } else {
+                // Handle one element at a time for the remaining elements of this row
+                sum0 += Avals[i] * v[Acols[i]];
+                i++;
             }
         }
-        C[row] = sum0 + sum1 + sum2 + sum3;
+        
+        C[row] += sum0 + sum1 + sum2 + sum3;
     }
 }
 
@@ -140,6 +139,7 @@ int main(int argc, char *argv[]) {
         }
     }
     printf("[CPU rowSplit] Average elapsed time: %fms\n", tot_time / (ITERATIONS - 1));
+    print_double_array(C, rows);
 
     fclose(fin);
 
