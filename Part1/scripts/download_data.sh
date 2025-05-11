@@ -4,14 +4,24 @@ mkdir -p Data
 
 # Array of dataset URLs
 urls=(
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/1138_bus.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/bcsstk18.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/bcsstm25.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/gemat11.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/GHS_psdef/gridgena.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/VanVelzen/Zd_Jac3_db.tar.gz"
+    # Diagonal matrices - GPU
+    "https://sparse.tamu.edu/Bodendiek/CurlCurl_4"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Schenk_AFE/af_shell8.tar.gz"
+    # Diagonal matrices - CPU
+    "https://sparse.tamu.edu/Andrews/Andrews"
+    "https://sparse.tamu.edu/Bai/af23560"
+
+    # Arrowhead matrices - GPU
+    "https://suitesparse-collection-website.herokuapp.com/MM/Rajat/rajat31.tar.gz"
+    # Arrowhead matrices - CPU
+    "https://sparse.tamu.edu/TKK/cyl6"
+
+    # Unstructured matrices - GPU
     "https://suitesparse-collection-website.herokuapp.com/MM/MAWI/mawi_201512012345.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/Janna/ML_Geer.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Belcastro/human_gene2.tar.gz"
+    # Unstructured matrices - CPU
+    "https://sparse.tamu.edu/AMD/G2_circuit"
+    "https://sparse.tamu.edu/HB/cegb2919"
 )
 
 # Make sure Data directory exists
