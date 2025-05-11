@@ -174,7 +174,7 @@ int main(int argc, char *argv[]) {
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
-        printf("Kernel completed in %fms\n", e_time);
+        // printf("Kernel completed in %fms\n", e_time);
         if (first == 1) {
             first = 0;
         } else {
@@ -184,7 +184,7 @@ int main(int argc, char *argv[]) {
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
     }
-    print_double_array(C, rows);
+    // print_double_array(C, rows);
 
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);

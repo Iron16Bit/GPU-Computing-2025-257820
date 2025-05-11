@@ -138,8 +138,8 @@ int main(int argc, char *argv[]) {
             tot_time += TIMER_ELAPSED(var);
         }
     }
-    printf("[CPU rowSplit] Average elapsed time: %fms\n", tot_time / (ITERATIONS - 1));
-    print_double_array(C, rows);
+    printf("[CPU multiAcc] Average elapsed time: %fms\n", tot_time / (ITERATIONS - 1));
+    // print_double_array(C, rows);
 
     fclose(fin);
 

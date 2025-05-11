@@ -5,23 +5,23 @@ mkdir -p Data
 # Array of dataset URLs
 urls=(
     # Diagonal matrices - GPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/Bodendiek/CurlCurl_4.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/Schenk_AFE/af_shell8.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Bodendiek/CurlCurl_4.tar.gz"       #* OK
+    "https://suitesparse-collection-website.herokuapp.com/MM/Schenk_AFE/af_shell8.tar.gz"       #* OK
     # Diagonal matrices - CPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/Andrews/Andrews.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/Bai/af23560.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Shyy/shyy161.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Bai/af23560.tar.gz"                #* OK
 
     # Arrowhead matrices - GPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/Rajat/rajat31.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Rajat/rajat31.tar.gz"              #* OK
     # Arrowhead matrices - CPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/TKK/cyl6.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/TKK/cyl6.tar.gz"                   #* OK
 
     # Unstructured matrices - GPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/MAWI/mawi_201512012345.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/Belcastro/human_gene2.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/MAWI/mawi_201512012345.tar.gz"     #* OK
+    "https://suitesparse-collection-website.herokuapp.com/MM/Belcastro/human_gene2.tar.gz"      #* OK
     # Unstructured matrices - CPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/AMD/G2_circuit.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/cegb2919.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/IBM_EDA/ckt11752_dc_1.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/HB/cegb2919.tar.gz"                #! Missing?
 )
 
 # Make sure Data directory exists

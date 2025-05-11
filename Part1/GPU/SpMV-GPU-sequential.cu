@@ -182,7 +182,7 @@ int main(int argc, char *argv[]) {
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
-        printf("Kernel completed in %fms\n", e_time);
+        // printf("Kernel completed in %fms\n", e_time);
         if (first == 1) {
             first = 0;
         } else {
