@@ -77,13 +77,28 @@ void print_matrix(double* m, int rows, int cols) {
 //     return dataGB / timeS;
 // }
 
-int ITERATIONS = 51;
+#define ITERATIONS 51
+#define DEFAULT_THREADS_PER_BLOCK 256
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "Usage: %s <input_file> [threads_per_block]\n", argv[0]);
         return 1;
     }
+
+    // Parse threads per block parameter
+    int threadsPerBlock = DEFAULT_THREADS_PER_BLOCK;
+    if (argc == 3) {
+        int user_threads = atoi(argv[2]);
+        if (user_threads > 0) {
+            threadsPerBlock = user_threads;
+        } else {
+            fprintf(stderr, "Warning: Invalid threads per block value, using default (%d)\n", 
+                    DEFAULT_THREADS_PER_BLOCK);
+        }
+    }
+    
+    printf("Using %d threads per block\n", threadsPerBlock);
 
     FILE *fin = fopen(argv[1], "r");
 
@@ -155,7 +170,6 @@ int main(int argc, char *argv[]) {
     
     // Perform SpMV
     int N = rows;
-    int threadsPerBlock = 256;
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
     first = 1;
@@ -190,7 +204,7 @@ int main(int argc, char *argv[]) {
     // print_double_array(C, rows);
 
     // Calculate average time
-    double avg_time = totalTime / ITERATIONS;
+    double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
     // printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
 
