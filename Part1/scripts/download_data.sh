@@ -8,7 +8,7 @@ urls=(
     "https://suitesparse-collection-website.herokuapp.com/MM/Bodendiek/CurlCurl_4.tar.gz"       #* OK
     "https://suitesparse-collection-website.herokuapp.com/MM/Schenk_AFE/af_shell8.tar.gz"       #* OK
     # Diagonal matrices - CPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/Shyy/shyy161.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/GHS_indef/spmsrtls.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/Bai/af23560.tar.gz"                #* OK
 
     # Arrowhead matrices - GPU
@@ -20,8 +20,8 @@ urls=(
     "https://suitesparse-collection-website.herokuapp.com/MM/MAWI/mawi_201512012345.tar.gz"     #* OK
     "https://suitesparse-collection-website.herokuapp.com/MM/Belcastro/human_gene2.tar.gz"      #* OK
     # Unstructured matrices - CPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/IBM_EDA/ckt11752_dc_1.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/cegb2919.tar.gz"                #! Missing?
+    "https://suitesparse-collection-website.herokuapp.com/MM/Mallya/lhr10.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/GHS_indef/cvxqp3.tar.gz"           #* OK
 )
 
 # Make sure Data directory exists
