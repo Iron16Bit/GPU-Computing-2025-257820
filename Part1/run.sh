@@ -1,5 +1,5 @@
 #!/bin/bash
-# filepath: c:\Users\gille\Desktop\GPU-Computing-2025-257820\Part1\scripts\run_gpu_job.sh
+# filepath: c:\Users\gille\Desktop\GPU-Computing-2025-257820\Part1\scripts\select_job.sh
 
 # Create outputs directory if it doesn't exist
 mkdir -p outputs
@@ -38,6 +38,8 @@ fi
 
 selected_exec="${executables[$((exec_choice-1))]}"
 exec_name=$(basename "$selected_exec")
+# Remove .exec extension if present
+exec_name="${exec_name%.exec}"
 
 # Find all matrix files in Data directory
 echo -e "\nAvailable matrices:"
@@ -67,12 +69,12 @@ additional_args=""
 
 # Check if the selected executable is GPU-based
 if [[ "$selected_exec" == *"GPU"* ]]; then
-    if [[ "$exec_name" == "SpMV-GPU-rowSplit.exec" || "$exec_name" == "SpMV-GPU-tpv.exec" ]]; then
+    if [[ "$exec_name" == "SpMV-GPU-rowSplit" || "$exec_name" == "SpMV-GPU-tpv" ]]; then
         read -p "Enter threads per block (default: 256): " threads_per_block
         if [ -n "$threads_per_block" ]; then
             additional_args="$threads_per_block"
         fi
-    elif [[ "$exec_name" == "SpMV-GPU-sequential.exec" || "$exec_name" == "SpMV-GPU-stride.exec" ]]; then
+    elif [[ "$exec_name" == "SpMV-GPU-sequential" || "$exec_name" == "SpMV-GPU-stride" ]]; then
         read -p "Enter threads per block (default: 256): " threads_per_block
         read -p "Enter number of blocks (default: 4): " num_blocks
         
@@ -84,34 +86,5 @@ if [[ "$selected_exec" == *"GPU"* ]]; then
     fi
 fi
 
-# Create SLURM job script
-job_script="slurm_job_${exec_name}_$(date +%s).sh"
-
-cat > "$job_script" << EOF
-#!/bin/bash
-#SBATCH --job-name=${exec_name}
-#SBATCH --output=outputs/${exec_name}_%j.out
-#SBATCH --partition=edu-short
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
-EOF
-
-# Add GPU resource request for GPU executables
-if [[ "$selected_exec" == *"GPU"* ]]; then
-    echo "#SBATCH --gres=gpu:1" >> "$job_script"
-    echo "module load CUDA/12.1.1" >> "$job_script"
-fi
-
-# Add the command to run
-echo "" >> "$job_script"
-echo "$selected_exec $selected_matrix $additional_args" >> "$job_script"
-
-# Make executable and submit
-chmod +x "$job_script"
-echo -e "\nSubmitting job with the following command:"
-echo "$selected_exec $selected_matrix $additional_args"
-echo "Submitting job script: $job_script"
-
-sbatch "$job_script"
-echo "Job submitted. Check outputs directory for results."
+# Call the run script with all parameters
+bash scripts/run_job.sh "$selected_exec" "$selected_matrix" "$additional_args" "$exec_name"
