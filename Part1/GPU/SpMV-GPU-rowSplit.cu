@@ -41,6 +41,15 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
     }
 }
 
+// Compute bandwidth and flops
+void compute_band_gflops(int rows, int cols, int values, double time) {
+    size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
+    double bandwidth = (bytes * 1e-9) / (time * 1e-3);
+    double flops = (2 * values) / (time * 1e-3) * 1e-9;
+    printf("Bandwidth: %f GB/s\n", bandwidth);
+    printf("FLOPS: %f GFLOPS\n", flops);
+}
+
 void print_int_array(int* a, int n) {
     for (int i=0; i<n; i++) {
         printf("%d ", a[i]);
@@ -63,19 +72,6 @@ void print_matrix(double* m, int rows, int cols) {
         printf("\n");
     }
 }
-
-// double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
-//     double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-//     double vector_size = cols * sizeof(double); // Dense vector size in bytes
-//     double output_size = rows * sizeof(double); // Output vector size in bytes
-//     double bytesAccessed = COO_size + vector_size + output_size;
-
-//     // Convert ms to seconds and bytes to GB
-//     double timeS = timeMs * 1e-3;
-//     double dataGB = bytesAccessed * 1e-9;
-    
-//     return dataGB / timeS;
-// }
 
 #define ITERATIONS 51
 #define DEFAULT_THREADS_PER_BLOCK 256
@@ -206,7 +202,7 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    // printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
+    compute_band_gflops(rows, cols, values, avg_time);
 
     fclose(fin);
     
