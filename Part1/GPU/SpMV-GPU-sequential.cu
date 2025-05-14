@@ -25,12 +25,19 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
 }
 
 // Compute bandwidth and flops
-void compute_band_gflops(int rows, int cols, int values, double time) {
+void compute_band_gflops(int rows, int cols, int values, double time_ms) {
+    // 2 floating-point operations per non-zero element (multiply + add)
+    double operations = 2.0 * values;
+    
+    // Convert to GFLOPS: operations / (time in seconds) / 1e9
+    double gflops = operations / (time_ms / 1000.0) / 1e9;
+    
+    // Bandwidth calculation
     size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
-    double bandwidth = (bytes * 1e-9) / (time * 1e-3);
-    double flops = (2 * values) / (time * 1e-3) * 1e-9;
+    double bandwidth = (bytes / 1e9) / (time_ms / 1000.0);
+    
     printf("Bandwidth: %f GB/s\n", bandwidth);
-    printf("FLOPS: %f GFLOPS\n", flops);
+    printf("FLOPS: %f GFLOPS\n", gflops);
 }
 
 void print_int_array(int* a, int n) {
@@ -55,19 +62,6 @@ void print_matrix(double* m, int rows, int cols) {
         printf("\n");
     }
 }
-
-// double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
-//     double COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-//     double vector_size = cols * sizeof(double); // Dense vector size in bytes
-//     double output_size = rows * sizeof(double); // Output vector size in bytes
-//     double bytesAccessed = COO_size + vector_size + output_size;
-
-//     // Convert ms to seconds and bytes to GB
-//     double timeS = timeMs * 1e-3;
-//     double dataGB = bytesAccessed * 1e-9;
-    
-//     return dataGB / timeS;
-// }
 
 #define ITERATIONS 51
 #define DEFAULT_THREADS 256

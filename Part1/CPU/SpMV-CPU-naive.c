@@ -37,12 +37,19 @@ void matrix_multiplication(double *A, double *B, double *C, int rows, int cols) 
 }
 
 // Compute bandwidth and flops
-void compute_band_gflops(int rows, int cols, int values, double time) {
-    size_t bytes = sizeof(double) * (rows * cols + rows + cols);
-    double bandwidth = (bytes * 1e-9) / (time * 1e-3);
-    double flops = (2 * rows * cols) / (time * 1e-3);
+void compute_band_gflops(int rows, int cols, int values, double time_ms) {
+    // 2 floating-point operations per non-zero element (multiply + add)
+    double operations = 2.0 * values;
+    
+    // Convert to GFLOPS: operations / (time in seconds) / 1e9
+    double gflops = operations / (time_ms / 1000.0) / 1e9;
+    
+    // Bandwidth calculation
+    size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
+    double bandwidth = (bytes / 1e9) / (time_ms / 1000.0);
+    
     printf("Bandwidth: %f GB/s\n", bandwidth);
-    printf("FLOPS: %f GFLOPS\n", flops);
+    printf("FLOPS: %f GFLOPS\n", gflops);
 }
 
 #define ITERATIONS 51
@@ -113,6 +120,9 @@ int main(int argc, char *argv[]) {
     double *M = (double *)malloc(rows*cols*sizeof(double));
     double *C = (double *)malloc(rows*sizeof(double));
     memset(M, 0, rows*cols*sizeof(double));
+    for(int i=0; i<values; i++) {
+        M[Arows[i]*cols+Acols[i]] = Avals[i];
+    }
 
     first = 1;
     double tot_time = 0.0;
@@ -121,9 +131,6 @@ int main(int argc, char *argv[]) {
         memset(C, 0, rows*sizeof(double));
         TIMER_DEF(var);
         TIMER_START(var);
-        for(int i=0; i<values; i++) {
-            M[Arows[i]*cols+Acols[i]] = Avals[i];
-        }
         // Perform matrix multiplication
         matrix_multiplication(M, v, C, rows, cols);
         TIMER_STOP(var);
