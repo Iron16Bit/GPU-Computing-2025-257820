@@ -103,6 +103,7 @@ int main(int argc, char *argv[]) {
     }
 
     printf("Using configuration: %d threads per block, %d blocks\n", THREADS, BLOCKS);
+    printf("Used matrix: %s\n", argv[1]);
 
     FILE *fin = fopen(argv[1], "r");
 

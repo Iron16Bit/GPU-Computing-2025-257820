@@ -7,6 +7,9 @@ MATRIX="$2"
 ADDITIONAL_ARGS="$3"
 EXEC_NAME="$4"
 
+# Extract matrix name for output
+MATRIX_NAME=$(basename "$MATRIX")
+
 # Check if executable exists
 if [ ! -f "$EXECUTABLE" ]; then
     echo "Error: Executable does not exist: $EXECUTABLE"
@@ -21,21 +24,22 @@ fi
 
 # Create the SBATCH command
 SBATCH_CMD="sbatch"
-SBATCH_CMD+=" --job-name=${EXEC_NAME}"
-SBATCH_CMD+=" --output=outputs/${EXEC_NAME}_%j.txt"
+SBATCH_CMD+=" --job-name=${EXEC_NAME}_${MATRIX_NAME}"
+SBATCH_CMD+=" --output=outputs/${EXEC_NAME}_${MATRIX_NAME}_%j.txt"
 SBATCH_CMD+=" --partition=edu-short"
 SBATCH_CMD+=" --nodes=1"
 SBATCH_CMD+=" --ntasks-per-node=1"
 SBATCH_CMD+=" --cpus-per-task=1"
 
-# Add GPU resources if this is a GPU job
+# Add GPU resources - specify gpu:0 for CPU jobs, gpu:1 for GPU jobs
 if [[ "$EXECUTABLE" == *"GPU"* ]]; then
     SBATCH_CMD+=" --gres=gpu:1"
     # Wrap the commands in a script
-    SBATCH_CMD+=" --wrap=\"module load CUDA/12.1.1 && $EXECUTABLE $MATRIX $ADDITIONAL_ARGS\""
+    SBATCH_CMD+=" --wrap=\"module load CUDA/12.1.1 && echo 'Running on matrix: $MATRIX_NAME' && $EXECUTABLE $MATRIX $ADDITIONAL_ARGS\""
 else
-    # CPU job
-    SBATCH_CMD+=" --wrap=\"$EXECUTABLE $MATRIX $ADDITIONAL_ARGS\""
+    # CPU job - explicitly specify gpu:0
+    SBATCH_CMD+=" --gres=gpu:0"
+    SBATCH_CMD+=" --wrap=\"echo 'Running on matrix: $MATRIX_NAME' && $EXECUTABLE $MATRIX $ADDITIONAL_ARGS\""
 fi
 
 # Print and execute the command
@@ -48,4 +52,4 @@ JOB_SUBMISSION=$(eval $SBATCH_CMD)
 JOB_ID=$(echo $JOB_SUBMISSION | grep -oP 'Submitted batch job \K[0-9]+')
 
 echo "Job submitted with ID: $JOB_ID"
-echo "Output will be in: outputs/${EXEC_NAME}_${JOB_ID}.txt"
+echo "Output will be in: outputs/${EXEC_NAME}_${MATRIX_NAME}_${JOB_ID}.txt"

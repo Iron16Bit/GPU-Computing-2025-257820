@@ -133,6 +133,7 @@ int main(int argc, char *argv[]) {
             tot_time += TIMER_ELAPSED(var);
         }
     }
+    printf("Used matrix: %s\n", argv[1]);
     printf("[CPU naive] Average time: %fms\n", tot_time / (ITERATIONS-1));
     compute_band_gflops(rows, cols, values, tot_time / (ITERATIONS-1));
     

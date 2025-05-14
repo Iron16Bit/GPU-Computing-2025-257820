@@ -182,6 +182,7 @@ int main(int argc, char *argv[]) {
     }
     // print_double_array(C, rows);
 
+    printf("Used matrix: %s\n", argv[1]);
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);

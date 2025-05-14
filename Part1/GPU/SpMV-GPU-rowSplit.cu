@@ -95,6 +95,7 @@ int main(int argc, char *argv[]) {
     }
     
     printf("Using %d threads per block\n", threadsPerBlock);
+    printf("Used matrix: %s\n", argv[1]);
 
     FILE *fin = fopen(argv[1], "r");
 
