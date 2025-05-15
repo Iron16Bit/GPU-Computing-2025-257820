@@ -56,17 +56,30 @@ void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, dou
 }
 
 // Compute bandwidth and flops
-void compute_band_gflops(int rows, int cols, int values, double time_ms) {
-    // 2 floating-point operations per non-zero element (multiply + add)
+void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Acols) {
+    // Bytes read from the COO
+    size_t coo_size = (size_t)(sizeof(int) * (2 * values) + sizeof(double) * values);
+    // Bytes read from the dense vector
+    int* unique_cols = (int*)calloc(cols, sizeof(int));
+    int unique_count = 0;
+    for (int i=0; i<cols; i++) {
+        if (unique_cols[Acols[i]] == 0) {
+            unique_cols[Acols[i]] = 1;
+            unique_count += 1;
+        }
+    }
+    size_t vector_size = (size_t)(sizeof(double) * unique_count);
+    // Total bytes read
+    size_t bytes_read = coo_size + vector_size;
+    // Bytes written
+    size_t bytes_written = (size_t)(sizeof(double) * rows);
+    size_t total_bytes = bytes_read + bytes_written;
+
+    // GFLOPS
+    double bandwidth = total_bytes / (time_ms * 1.0e9);
     double operations = 2.0 * values;
-    
-    // Convert to GFLOPS: operations / (time in seconds) / 1e9
-    double gflops = operations / (time_ms / 1000.0) / 1e9;
-    
-    // Bandwidth calculation
-    size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
-    double bandwidth = (bytes / 1e9) / (time_ms / 1000.0);
-    
+    double gflops = operations / (time_ms * 1.0e9);
+
     printf("Bandwidth: %f GB/s\n", bandwidth);
     printf("FLOPS: %f GFLOPS\n", gflops);
 }
@@ -156,7 +169,7 @@ int main(int argc, char *argv[]) {
     }
     printf("Used matrix: %s\n", argv[1]);
     printf("[CPU multiAcc] Average elapsed time: %fms\n", tot_time / (ITERATIONS - 1));
-    compute_band_gflops(rows, cols, values, tot_time / (ITERATIONS-1));
+    compute_band_gflops(rows, cols, values, tot_time / (ITERATIONS-1), Acols);
 
     fclose(fin);
 

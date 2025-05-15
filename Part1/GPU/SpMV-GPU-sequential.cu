@@ -25,6 +25,32 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
 }
 
 // Compute bandwidth and flops
+<<<<<<< HEAD
+void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Acols) {
+    // Bytes read from the COO
+    size_t coo_size = (size_t)(sizeof(int) * (2 * values) + sizeof(double) * values);
+    // Bytes read from the dense vector
+    int* unique_cols = (int*)calloc(cols, sizeof(int));
+    int unique_count = 0;
+    for (int i=0; i<cols; i++) {
+        if (unique_cols[Acols[i]] == 0) {
+            unique_cols[Acols[i]] = 1;
+            unique_count += 1;
+        }
+    }
+    size_t vector_size = (size_t)(sizeof(double) * unique_count);
+    // Total bytes read
+    size_t bytes_read = coo_size + vector_size;
+    // Bytes written
+    size_t bytes_written = (size_t)(sizeof(double) * rows);
+    size_t total_bytes = bytes_read + bytes_written;
+
+    // GFLOPS
+    double bandwidth = total_bytes / (time_ms * 1.0e9);
+    double operations = 2.0 * values;
+    double gflops = operations / (time_ms * 1.0e9);
+
+=======
 void compute_band_gflops(int rows, int cols, int values, double time_ms, int BLOCKS, int THREADS) {
     // 2 floating-point operations per non-zero element (multiply + add)
     double operations = 2.0 * values;
@@ -37,6 +63,7 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int BLO
     int total_threads = BLOCKS * THREADS;
     double bandwidth = ((bytes * total_threads) / 1e9) / (time_ms / 1000.0);
     
+>>>>>>> 11679873ea01cdb6e7d99d7ae3b8c27b4c3b95ee
     printf("Bandwidth: %f GB/s\n", bandwidth);
     printf("FLOPS: %f GFLOPS\n", gflops);
 }
@@ -202,7 +229,11 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
+<<<<<<< HEAD
+    compute_band_gflops(rows, cols, values, avg_time, Acols);
+=======
     compute_band_gflops(rows, cols, values, avg_time, BLOCKS, THREADS);
+>>>>>>> 11679873ea01cdb6e7d99d7ae3b8c27b4c3b95ee
 
     fclose(fin);
     
