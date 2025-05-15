@@ -22,7 +22,7 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms) {
     
     // Bandwidth calculation
     size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
-    double bandwidth = (bytes / 1e9) / (time_ms / 1000.0);
+    double bandwidth = ((bytes * values) / 1e9) / (time_ms / 1000.0);
     
     printf("Bandwidth: %f GB/s\n", bandwidth);
     printf("FLOPS: %f GFLOPS\n", gflops);

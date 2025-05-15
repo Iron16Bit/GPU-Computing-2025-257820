@@ -25,7 +25,7 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
 }
 
 // Compute bandwidth and flops
-void compute_band_gflops(int rows, int cols, int values, double time_ms) {
+void compute_band_gflops(int rows, int cols, int values, double time_ms, int BLOCKS, int THREADS) {
     // 2 floating-point operations per non-zero element (multiply + add)
     double operations = 2.0 * values;
     
@@ -34,7 +34,8 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms) {
     
     // Bandwidth calculation
     size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
-    double bandwidth = (bytes / 1e9) / (time_ms / 1000.0);
+    int total_threads = BLOCKS * THREADS;
+    double bandwidth = ((bytes * total_threads) / 1e9) / (time_ms / 1000.0);
     
     printf("Bandwidth: %f GB/s\n", bandwidth);
     printf("FLOPS: %f GFLOPS\n", gflops);
@@ -201,7 +202,7 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    compute_band_gflops(rows, cols, values, avg_time);
+    compute_band_gflops(rows, cols, values, avg_time, BLOCKS, THREADS);
 
     fclose(fin);
     
