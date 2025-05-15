@@ -64,20 +64,8 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
     // GFLOPS
     double bandwidth = total_bytes / (time_ms * 1.0e9);
     double operations = 2.0 * values;
-<<<<<<< HEAD
     double gflops = operations / (time_ms * 1.0e9);
 
-=======
-    
-    // Convert to GFLOPS: operations / (time in seconds) / 1e9
-    double gflops = operations / (time_ms / 1000.0) / 1e9;
-    
-    // Bandwidth calculation
-    size_t bytes = sizeof(double) * (values + rows + cols) + sizeof(int) * (2 * values);
-    // bytes * rows = each thread accesses that number of bytes, and # threads = # rows
-    double bandwidth = ((bytes * rows) / 1e9) / (time_ms / 1000.0);
-    
->>>>>>> 11679873ea01cdb6e7d99d7ae3b8c27b4c3b95ee
     printf("Bandwidth: %f GB/s\n", bandwidth);
     printf("FLOPS: %f GFLOPS\n", gflops);
 }
