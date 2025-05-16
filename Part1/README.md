@@ -32,3 +32,12 @@ https://sparse.tamu.edu/MAWI/mawi_201512012345 \
 https://sparse.tamu.edu/Belcastro/human_gene2 \
 https://sparse.tamu.edu/Mallya/lhr10 \
 https://sparse.tamu.edu/GHS_indef/cvxqp3
+
+### Unstr
+https://sparse.tamu.edu/Gaertner/pesa \
+https://sparse.tamu.edu/Mallya/lhr02 \
+https://sparse.tamu.edu/HB/bcsstk08
+### Diagonal
+https://sparse.tamu.edu/CPM/cz5108 \
+https://sparse.tamu.edu/Muite/Chebyshev3 \
+https://sparse.tamu.edu/Fluorem/DK01R

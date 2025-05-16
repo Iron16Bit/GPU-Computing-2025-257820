@@ -1,5 +1,4 @@
 #!/bin/bash
-# filepath: c:\Users\gille\Desktop\GPU-Computing-2025-257820\Part1\run_batch.sh
 
 # Create outputs directory if it doesn't exist
 mkdir -p outputs
@@ -8,35 +7,49 @@ mkdir -p outputs
 THREADS_PER_BLOCK=(32 128 256 512 1024 2048)
 BLOCKS=(1 4 8 16 32 64 128)
 
+# Define GPU and CPU matrices based on the original names
+GPU_MATRICES=(
+    # Diagonal matrices for GPU
+    "CurlCurl_4"
+    "af_shell8"
+    "af23560"
+    # Unstructured matrices for GPU
+    "mawi_201512012345"
+    "human_gene2"
+    "lhr10"
+)
+
+CPU_MATRICES=(
+    # Unstructured matrices for CPU
+    "pesa"
+    "lhr02"
+    "bcsstk08"
+    # Diagonal matrices for CPU
+    "cz5108"
+    "Chebyshev3"
+    "DK01R"
+)
+
 # Find all executables in bin directory
 echo "Finding all executables..."
-executables=()
+CPU_EXECUTABLES=()
+GPU_EXECUTABLES=()
 
 # List CPU executables
 for exec in bin/CPU/*; do
     if [ -x "$exec" ]; then
-        executables+=("$exec")
+        CPU_EXECUTABLES+=("$exec")
     fi
 done
 
 # List GPU executables
 for exec in bin/GPU/*.exec; do
     if [ -x "$exec" ]; then
-        executables+=("$exec")
+        GPU_EXECUTABLES+=("$exec")
     fi
 done
 
-# Find all matrix files in Data directory
-echo "Finding all matrix files..."
-matrices=()
-
-for matrix in Data/*.mtx; do
-    if [ -f "$matrix" ]; then
-        matrices+=("$matrix")
-    fi
-done
-
-echo "Found ${#executables[@]} executables and ${#matrices[@]} matrices"
+echo "Found ${#CPU_EXECUTABLES[@]} CPU executables and ${#GPU_EXECUTABLES[@]} GPU executables"
 echo "Starting batch runs..."
 
 # Function to run a single job
@@ -53,41 +66,63 @@ run_job() {
     sleep 1
 }
 
-# Process each executable
-for exec in "${executables[@]}"; do
+# Process CPU executables with CPU matrices
+echo "Processing CPU executables..."
+for exec in "${CPU_EXECUTABLES[@]}"; do
+    exec_name=$(basename "$exec")
+    echo "Processing executable: $exec_name"
+    
+    for matrix_base in "${CPU_MATRICES[@]}"; do
+        # Find the actual matrix file (might have _sorted.mtx suffix)
+        matrix_file=$(find Data/ -name "${matrix_base}*.mtx" | head -1)
+        
+        if [ -n "$matrix_file" ] && [ -f "$matrix_file" ]; then
+            matrix_name=$(basename "$matrix_file")
+            echo "  With matrix: $matrix_name"
+            run_job "$exec" "$matrix_file" "" "${exec_name}"
+        else
+            echo "  Warning: Matrix file for $matrix_base not found"
+        fi
+    done
+done
+
+# Process GPU executables with GPU matrices
+echo "Processing GPU executables..."
+for exec in "${GPU_EXECUTABLES[@]}"; do
     exec_name=$(basename "$exec")
     # Remove .exec extension if present
     exec_name="${exec_name%.exec}"
-    
     echo "Processing executable: $exec_name"
     
-    for matrix in "${matrices[@]}"; do
-        matrix_name=$(basename "$matrix")
-        echo "  With matrix: $matrix_name"
+    for matrix_base in "${GPU_MATRICES[@]}"; do
+        # Find the actual matrix file (might have _sorted.mtx suffix)
+        matrix_file=$(find Data/ -name "${matrix_base}*.mtx" | head -1)
         
-        # Different handling based on executable type
-        if [[ "$exec" == *"GPU"* ]]; then
+        if [ -n "$matrix_file" ] && [ -f "$matrix_file" ]; then
+            matrix_name=$(basename "$matrix_file")
+            echo "  With matrix: $matrix_name"
+            
+            # Different handling based on executable type
             if [[ "$exec_name" == "SpMV-GPU-rowSplit" || "$exec_name" == "SpMV-GPU-tpv" ]]; then
                 # Only test threads per block for these executables
                 for tpb in "${THREADS_PER_BLOCK[@]}"; do
                     args="$tpb"
-                    run_job "$exec" "$matrix" "$args" "${exec_name}_tpb${tpb}"
+                    run_job "$exec" "$matrix_file" "$args" "${exec_name}_tpb${tpb}"
                 done
             elif [[ "$exec_name" == "SpMV-GPU-sequential" || "$exec_name" == "SpMV-GPU-stride" ]]; then
                 # Test both threads per block and number of blocks
                 for tpb in "${THREADS_PER_BLOCK[@]}"; do
                     for blk in "${BLOCKS[@]}"; do
                         args="$tpb $blk"
-                        run_job "$exec" "$matrix" "$args" "${exec_name}_tpb${tpb}_b${blk}"
+                        run_job "$exec" "$matrix_file" "$args" "${exec_name}_tpb${tpb}_b${blk}"
                     done
                 done
             else
                 # Other GPU executables, run with no parameters
-                run_job "$exec" "$matrix" "" "$exec_name"
+                run_job "$exec" "$matrix_file" "" "$exec_name"
             fi
         else
-            # CPU executables, run with no additional parameters
-            run_job "$exec" "$matrix" "" "$exec_name"
+            echo "  Warning: Matrix file for $matrix_base not found"
         fi
     done
 done
@@ -123,12 +158,25 @@ if [[ "$wait_response" == "y" || "$wait_response" == "Y" ]]; then
     echo "Generated at: $(date)" >> performance_summary.txt
     echo "" >> performance_summary.txt
     
-    for exec_name in $(ls outputs/ | cut -d '_' -f 1 | sort -u); do
+    echo "CPU Algorithms" >> performance_summary.txt
+    echo "=============" >> performance_summary.txt
+    for exec_name in $(ls outputs/ | grep -v "GPU" | cut -d '_' -f 1 | sort -u); do
         echo "Executable: $exec_name" >> performance_summary.txt
         echo "------------------------" >> performance_summary.txt
         
         # Extract performance data
-        grep "Average time" outputs/${exec_name}_* | sort -n -k 4 | head -n 10 >> performance_summary.txt
+        grep "Average \|elapsed time" outputs/${exec_name}_* | sort -n -k 4 | head -n 10 >> performance_summary.txt
+        echo "" >> performance_summary.txt
+    done
+    
+    echo "GPU Algorithms" >> performance_summary.txt
+    echo "=============" >> performance_summary.txt
+    for exec_name in $(ls outputs/ | grep "GPU" | cut -d '_' -f 1 | sort -u); do
+        echo "Executable: $exec_name" >> performance_summary.txt
+        echo "------------------------" >> performance_summary.txt
+        
+        # Extract performance data
+        grep "Average \|elapsed time" outputs/${exec_name}_* | sort -n -k 4 | head -n 10 >> performance_summary.txt
         echo "" >> performance_summary.txt
     done
     
