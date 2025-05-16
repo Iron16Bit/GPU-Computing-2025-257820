@@ -1,0 +1,13 @@
+Algorithm            Matrix                         Blocks TPB    Time(ms)   Bandwidth    GFLOPS     
+SpMV-CPU-multipleAcc bcsstk08.mtx                   N/A    N/A    4.180000   0.030970     0.003357  
+SpMV-CPU-multipleAcc Chebyshev3.mtx                 N/A    N/A    19.400000  0.033798     0.003802  
+SpMV-CPU-multipleAcc cz5108.mtx                     N/A    N/A    25.820000  0.035024     0.003982  
+SpMV-CPU-multipleAcc DK01R.mtx                      N/A    N/A    5.440000   0.037262     0.004326  
+SpMV-CPU-multipleAcc lhr02.mtx                      N/A    N/A    19.640000  0.032717     0.003789  
+SpMV-CPU-multipleAcc pesa.mtx                       N/A    N/A    50.520000  0.028917     0.003150  
+SpMV-CPU-naive       bcsstk08.mtx                   N/A    N/A    N/A        0.012593     0.001365  
+SpMV-CPU-naive       Chebyshev3.mtx                 N/A    N/A    N/A        0.009114     0.001025  
+SpMV-CPU-naive       cz5108.mtx                     N/A    N/A    N/A        0.009649     0.001097  
+SpMV-CPU-naive       DK01R.mtx                      N/A    N/A    N/A        0.008985     0.001043  
+SpMV-CPU-naive       lhr02.mtx                      N/A    N/A    N/A        0.007032     0.000814  
+SpMV-CPU-naive       pesa.mtx                       N/A    N/A    N/A        0.013966     0.001521  
