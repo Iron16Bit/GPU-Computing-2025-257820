@@ -4,7 +4,7 @@
 mkdir -p outputs
 
 # Arrays of values to test
-THREADS_PER_BLOCK=(32 128 256 512 1024 2048)
+THREADS_PER_BLOCK=(32 128 256 512 1024)
 BLOCKS=(1 4 8 16 32 64 128)
 
 # Define GPU and CPU matrices based on the original names
@@ -129,56 +129,3 @@ done
 
 echo "All batch jobs submitted. Check 'squeue' for job status."
 echo "Results will be in the outputs directory."
-
-# Wait for all jobs to complete
-read -p "Do you want to wait for all jobs to complete (y/n)? " wait_response
-if [[ "$wait_response" == "y" || "$wait_response" == "Y" ]]; then
-    echo "Waiting for jobs to complete. This may take some time..."
-    sleep 10  # Initial delay
-    
-    # Check job count every 30 seconds
-    while true; do
-        job_count=$(squeue -u $USER | wc -l)
-        # Subtract 1 for the header line
-        job_count=$((job_count - 1))
-        
-        if [ $job_count -eq 0 ]; then
-            echo "All jobs completed!"
-            break
-        else
-            echo "$job_count jobs still running. Checking again in 30 seconds..."
-            sleep 30
-        fi
-    done
-    
-    # Create a summary report
-    echo "Creating performance summary..."
-    echo "Performance Summary" > performance_summary.txt
-    echo "===================" >> performance_summary.txt
-    echo "Generated at: $(date)" >> performance_summary.txt
-    echo "" >> performance_summary.txt
-    
-    echo "CPU Algorithms" >> performance_summary.txt
-    echo "=============" >> performance_summary.txt
-    for exec_name in $(ls outputs/ | grep -v "GPU" | cut -d '_' -f 1 | sort -u); do
-        echo "Executable: $exec_name" >> performance_summary.txt
-        echo "------------------------" >> performance_summary.txt
-        
-        # Extract performance data
-        grep "Average \|elapsed time" outputs/${exec_name}_* | sort -n -k 4 | head -n 10 >> performance_summary.txt
-        echo "" >> performance_summary.txt
-    done
-    
-    echo "GPU Algorithms" >> performance_summary.txt
-    echo "=============" >> performance_summary.txt
-    for exec_name in $(ls outputs/ | grep "GPU" | cut -d '_' -f 1 | sort -u); do
-        echo "Executable: $exec_name" >> performance_summary.txt
-        echo "------------------------" >> performance_summary.txt
-        
-        # Extract performance data
-        grep "Average \|elapsed time" outputs/${exec_name}_* | sort -n -k 4 | head -n 10 >> performance_summary.txt
-        echo "" >> performance_summary.txt
-    done
-    
-    echo "Summary saved to performance_summary.txt"
-fi
