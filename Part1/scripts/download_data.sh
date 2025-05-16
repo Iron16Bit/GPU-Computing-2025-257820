@@ -4,7 +4,7 @@ mkdir -p Data
 
 # Array of dataset URLs
 urls=(
-    # Diagonal matrices - GPU
+    Diagonal matrices - GPU
     "https://suitesparse-collection-website.herokuapp.com/MM/Bodendiek/CurlCurl_4.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/Schenk_AFE/af_shell8.tar.gz"
     # Diagonal matrices - CPU

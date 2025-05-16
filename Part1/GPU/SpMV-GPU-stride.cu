@@ -23,7 +23,7 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
     // Bytes read from the dense vector
     int* unique_cols = (int*)calloc(cols, sizeof(int));
     int unique_count = 0;
-    for (int i=0; i<cols; i++) {
+    for (int i=0; i<values; i++) {
         if (unique_cols[Acols[i]] == 0) {
             unique_cols[Acols[i]] = 1;
             unique_count += 1;
@@ -37,9 +37,9 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
     size_t total_bytes = bytes_read + bytes_written;
 
     // GFLOPS
-    double bandwidth = total_bytes / (time_ms * 1.0e9);
+    double bandwidth = total_bytes / (time_ms * 1.0e6);
     double operations = 2.0 * values;
-    double gflops = operations / (time_ms * 1.0e9);
+    double gflops = operations / (time_ms * 1.0e6);
 
     printf("Bandwidth: %f GB/s\n", bandwidth);
     printf("FLOPS: %f GFLOPS\n", gflops);
