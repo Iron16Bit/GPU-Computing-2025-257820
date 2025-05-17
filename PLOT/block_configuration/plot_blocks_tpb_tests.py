@@ -60,7 +60,7 @@ y_ticks = tpb
 
 # Bandwidth contour plot
 c1 = ax1.contourf(np.log2(X), Y, Z_bandwidth, levels=20, cmap='viridis')
-ax1.set_title('Memory Bandwidth')
+ax1.set_title('Bandwidth')
 ax1.set_xlabel('Number of Blocks')
 ax1.set_ylabel('Threads per Block')
 ax1.set_xticks(np.log2(x_ticks))
@@ -71,7 +71,7 @@ cbar1.ax.tick_params(labelsize=12)  # Make colorbar ticks a bit smaller
 
 # GFLOPS contour plot
 c2 = ax2.contourf(np.log2(X), Y, Z_gflops, levels=20, cmap='plasma')
-ax2.set_title('Computational Performance')
+ax2.set_title('GFLOPS')
 ax2.set_xlabel('Number of Blocks')
 ax2.set_ylabel('Threads per Block')
 ax2.set_xticks(np.log2(x_ticks))
@@ -81,7 +81,7 @@ cbar2.set_label('GFLOPS')
 cbar2.ax.tick_params(labelsize=12)  # Make colorbar ticks a bit smaller
 
 # Add a main title - make it compact
-fig.suptitle('SpMV Performance vs. Block Configuration', y=0.98)
+fig.suptitle('SpMV Performances vs. Block Configuration', y=0.98)
 
 # Make layout tight but with enough padding
 plt.tight_layout(rect=[0, 0, 1, 0.95])  # Leave room for the title

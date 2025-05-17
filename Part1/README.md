@@ -17,27 +17,20 @@ You will be asked to choose the algorithm and the matrix based on those availabl
 These are the [SuiteSparse Matrix Collection](https://sparse.tamu.edu/) matrices used to test the various algorithms.
 The links allow you to see the shape of various matrices.
 
-### Diagonal Matrices
+### Diagonal Matrices - GPU
 https://sparse.tamu.edu/Bodendiek/CurlCurl_4 \
 https://sparse.tamu.edu/Schenk_AFE/af_shell8 \
-https://sparse.tamu.edu/GHS_indef/spmsrtls \
 https://sparse.tamu.edu/Bai/af23560
-
-### Arrowhead Matrices
-https://sparse.tamu.edu/Rajat/rajat31 \
-https://sparse.tamu.edu/TKK/cyl6
-
-### Unstructured Matrices
+### Unstructured Matrices - GPU
 https://sparse.tamu.edu/MAWI/mawi_201512012345 \
 https://sparse.tamu.edu/Belcastro/human_gene2 \
 https://sparse.tamu.edu/Mallya/lhr10 \
-https://sparse.tamu.edu/GHS_indef/cvxqp3
 
-### Unstr
-https://sparse.tamu.edu/Gaertner/pesa \
-https://sparse.tamu.edu/Mallya/lhr02 \
-https://sparse.tamu.edu/HB/bcsstk08
-### Diagonal
+### Diagonal Matrices - CPU
 https://sparse.tamu.edu/CPM/cz5108 \
 https://sparse.tamu.edu/Muite/Chebyshev3 \
 https://sparse.tamu.edu/Fluorem/DK01R
+### Unstructured Matrices - CPU
+https://sparse.tamu.edu/Gaertner/pesa \
+https://sparse.tamu.edu/Mallya/lhr02 \
+https://sparse.tamu.edu/HB/bcsstk08

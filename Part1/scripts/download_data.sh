@@ -14,14 +14,14 @@ urls=(
     "https://suitesparse-collection-website.herokuapp.com/MM/Belcastro/human_gene2.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/Mallya/lhr10.tar.gz"
 
-    # Unstructured - CPU
-    "https://suitesparse-collection-website.herokuapp.com/MM/Gaertner/pesa.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/Mallya/lhr02.tar.gz"
-    "https://suitesparse-collection-website.herokuapp.com/MM/HB/bcsstk08.tar.gz"
     # Diagonal - CPU
     "https://suitesparse-collection-website.herokuapp.com/MM/CPM/cz5108.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/Muite/Chebyshev3.tar.gz"
     "https://suitesparse-collection-website.herokuapp.com/MM/Fluorem/DK01R.tar.gz"
+    # Unstructured - CPU
+    "https://suitesparse-collection-website.herokuapp.com/MM/Gaertner/pesa.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/Mallya/lhr02.tar.gz"
+    "https://suitesparse-collection-website.herokuapp.com/MM/HB/bcsstk08.tar.gz"
 )
 
 # Make sure Data directory exists
