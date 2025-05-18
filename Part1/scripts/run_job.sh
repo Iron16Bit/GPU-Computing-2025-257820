@@ -33,7 +33,7 @@ SBATCH_CMD+=" --cpus-per-task=1"
 
 # Add GPU resources - specify gpu:0 for CPU jobs, gpu:1 for GPU jobs
 if [[ "$EXECUTABLE" == *"GPU"* ]]; then
-    SBATCH_CMD+=" --gres=gpu:1"
+    SBATCH_CMD+=" --gres=gpu:a30.24:1"
     # Wrap the commands in a script
     SBATCH_CMD+=" --wrap=\"module load CUDA/12.1.1 && echo 'Running on matrix: $MATRIX_NAME' && $EXECUTABLE $MATRIX $ADDITIONAL_ARGS\""
 else
