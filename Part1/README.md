@@ -24,7 +24,7 @@ https://sparse.tamu.edu/Bai/af23560
 ### Unstructured Matrices - GPU
 https://sparse.tamu.edu/MAWI/mawi_201512012345 \
 https://sparse.tamu.edu/Belcastro/human_gene2 \
-https://sparse.tamu.edu/Mallya/lhr10 \
+https://sparse.tamu.edu/Mallya/lhr10 
 
 ### Diagonal Matrices - CPU
 https://sparse.tamu.edu/CPM/cz5108 \
