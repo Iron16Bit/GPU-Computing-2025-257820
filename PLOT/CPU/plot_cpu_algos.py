@@ -28,7 +28,7 @@ df = pd.read_csv(data_file, sep=r'\s+', engine='python', comment='//')
 df['Matrix'] = df['Matrix'].str.replace('.mtx', '')
 
 # Get unique algorithms and matrices
-algorithms = df['Algorithm'].unique()
+algorithms = sorted(df['Algorithm'].unique(), reverse=True)  # Sort in reverse to get naive first
 matrices = df['Matrix'].unique()
 
 # Function to get short algorithm names
@@ -44,7 +44,7 @@ bar_width = 0.3  # Slightly wider than GPU plots since fewer algorithms
 index = np.arange(len(matrices))
 
 # Professional color palette with good contrast for print
-colors = ['#4575b4', '#d73027']  # Blue, Red for the two CPU algorithms
+colors = ['#d73027', '#4575b4']  # Red for naive, Blue for multipleAcc (swapped order)
 
 # Plot Bandwidth
 for i, algo in enumerate(algorithms):

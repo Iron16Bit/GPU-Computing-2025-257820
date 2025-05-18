@@ -10,7 +10,7 @@ The makefile will download the dataset, extract it and sort the matrices.
 To run an algorithm on a specific matrix, use: ```./run.sh``` \
 You will be asked to choose the algorithm and the matrix based on those available and based on the chosen algorithm also the number of **BLOCKS** and **THREADS PER BLOCK**. The output of the scheduled job will be found in the *./outputs/* folder called "fileName_jobNumber.txt".
 
-**NB:** in case of error, make sure the *run.sh* file is executable by using ```chmod +x run.sh```
+**NB:** In case of error, make sure the *run.sh* file is executable by using ```chmod +x run.sh```
 
 ## Dataset Information
 

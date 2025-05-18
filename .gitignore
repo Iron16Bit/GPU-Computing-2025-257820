@@ -1,4 +1,6 @@
 Part1/Data/
 Part1/bin/
 Part1/scripts/sort
-# PLOT/
+PLOT/
+Part1/scripts/sort
+Part1/test.sh

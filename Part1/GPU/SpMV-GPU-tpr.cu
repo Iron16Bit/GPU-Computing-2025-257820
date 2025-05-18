@@ -4,23 +4,41 @@
 
 __global__
 void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x; 
+    int current_row = blockIdx.x * blockDim.x + threadIdx.x;
     
-    if (tid < values) {
-        int total_threads = gridDim.x * blockDim.x;
+    if (current_row < rows) {
+        double sum = 0.0;
         
-        int vals_per_thread = (values + total_threads - 1) / total_threads; 
-        int start = tid * vals_per_thread;                                 
-        int end = min(start + vals_per_thread, values);                    
-
-        if (start < values) {
-            for (int i = start; i < end; i++) {
-                if (i < values) { 
-                    double product = Avals[i] * v[Acols[i]]; 
-                    atomicAdd(&C[Arows[i]], product);
-                }
+        // Binary search to find the starting position for this row
+        int left = 0;
+        int right = values - 1;
+        int start_pos = values; // Default to end if row not found
+        
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+            if (Arows[mid] < current_row) {
+                left = mid + 1;
+            } else if (Arows[mid] > current_row) {
+                right = mid - 1;
+            } else {
+                // Found a match, but we need to find the first occurrence
+                start_pos = mid;
+                right = mid - 1;
             }
         }
+        
+        // If no match was found (sparse matrices might have empty rows), we can set start_pos to the left
+        // The row will be automatically skipped in the next loop
+        if (start_pos == values || Arows[start_pos] != current_row) {
+            start_pos = left;
+        }
+        
+        // Accumulate products for this row
+        for (int i = start_pos; i < values && Arows[i] == current_row; i++) {
+            sum += Avals[i] * v[Acols[i]];
+        }
+        
+        C[current_row] = sum;
     }
 }
 
@@ -77,39 +95,27 @@ void print_matrix(double* m, int rows, int cols) {
 }
 
 #define ITERATIONS 51
-#define DEFAULT_THREADS 256
-#define DEFAULT_BLOCKS 4
+#define DEFAULT_THREADS_PER_BLOCK 256
 
 int main(int argc, char *argv[]) {
-    if (argc < 2 || argc > 4) {
-        fprintf(stderr, "Usage: %s <input_file> [num_threads] [num_blocks]\n", argv[0]);
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "Usage: %s <input_file> [threads_per_block]\n", argv[0]);
         return 1;
     }
 
-    int THREADS = DEFAULT_THREADS;
-    int BLOCKS = DEFAULT_BLOCKS;
-
-    // Parse threads parameter
-    if (argc >= 3) {
+    // Parse threads per block parameter
+    int threadsPerBlock = DEFAULT_THREADS_PER_BLOCK;
+    if (argc == 3) {
         int user_threads = atoi(argv[2]);
-        if (user_threads > 0 && user_threads <= 1024) {
-            THREADS = user_threads;
+        if (user_threads > 0) {
+            threadsPerBlock = user_threads;
         } else {
-            fprintf(stderr, "Warning: Invalid number of threads, using default (%d)\n", DEFAULT_THREADS);
+            fprintf(stderr, "Warning: Invalid threads per block value, using default (%d)\n", 
+                    DEFAULT_THREADS_PER_BLOCK);
         }
     }
-
-    // Parse blocks parameter
-    if (argc >= 4) {
-        int user_blocks = atoi(argv[3]);
-        if (user_blocks > 0) {
-            BLOCKS = user_blocks;
-        } else {
-            fprintf(stderr, "Warning: Invalid number of blocks, using default (%d)\n", DEFAULT_BLOCKS);
-        }
-    }
-
-    printf("Using configuration: %d threads per block, %d blocks\n", THREADS, BLOCKS);
+    
+    printf("Using %d threads per block\n", threadsPerBlock);
     printf("Used matrix: %s\n", argv[1]);
 
     FILE *fin = fopen(argv[1], "r");
@@ -179,10 +185,14 @@ int main(int argc, char *argv[]) {
     // Create output vector using cudaMallocManaged
     double *C;
     cudaMallocManaged(&C, rows*sizeof(double));
-
-    cudaEvent_t start, stop;
+    
+    // Perform SpMV
+    int N = rows;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
     first = 1;
+
+    cudaEvent_t start, stop;
 
     for (int i=0; i<ITERATIONS; i++) {
         cudaMemset(C, 0, rows * sizeof(double));
@@ -191,7 +201,7 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(start);
 
-        spmv<<<BLOCKS, THREADS>>>(Arows, Acols, Avals, v, C, rows, cols, values);
+        spmv<<<blocksPerGrid, threadsPerBlock>>>(Arows, Acols, Avals, v, C, rows, cols, values);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);

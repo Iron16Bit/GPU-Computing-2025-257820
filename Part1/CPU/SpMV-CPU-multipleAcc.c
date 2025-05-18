@@ -26,10 +26,7 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    // Initialize result vector to zeros (this is already done in main())
-    // memset(C, 0, rows * sizeof(double));
-    
+void matrix_multiplication(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {    
     int i = 0;
     while (i < values) {
         int row = Arows[i];
