@@ -1,6 +1,11 @@
 Part1/Data/
 Part1/bin/
 Part1/scripts/sort
-PLOT/
 Part1/scripts/sort
 Part1/test.sh
+PLOT/
+Part2/Data/
+Part2/bin/
+Part2/scripts/sort
+Part2/scripts/sort
+Part2/test.sh
