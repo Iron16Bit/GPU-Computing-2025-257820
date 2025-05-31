@@ -84,7 +84,6 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
     printf("FLOPS: %f GFLOPS\n", gflops);
 }
 
-
 void init_row_pointer(int *Arows, int *row_pointer, int values, int rows) {
     row_pointer[0] = 0;
     int counter = 0;

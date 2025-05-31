@@ -71,6 +71,35 @@ void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows,
     }
 }
 
+// Compute bandwidth and flops
+void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Acols, int estimated_slices) {
+    // Bytes read from the CSR
+    size_t scoo = (size_t)(sizeof(int) * (2*values) + sizeof(int) * (estimated_slices+1) + sizeof(double) * values);
+    // Bytes read from the dense vector
+    int* unique_cols = (int*)calloc(cols, sizeof(int));
+    int unique_count = 0;
+    for (int i=0; i<values; i++) {
+        if (unique_cols[Acols[i]] == 0) {
+            unique_cols[Acols[i]] = 1;
+            unique_count += 1;
+        }
+    }
+    size_t vector_size = (size_t)(sizeof(double) * unique_count);
+    // Total bytes read
+    size_t bytes_read = scoo + vector_size;
+    // Bytes written
+    size_t bytes_written = (size_t)(sizeof(double) * rows);
+    size_t total_bytes = bytes_read + bytes_written;
+
+    // GFLOPS
+    double bandwidth = total_bytes / (time_ms * 1.0e6);
+    double operations = 2.0 * values;
+    double gflops = operations / (time_ms * 1.0e6);
+
+    printf("Bandwidth: %f GB/s\n", bandwidth);
+    printf("FLOPS: %f GFLOPS\n", gflops);
+}
+
 void print_int_array(int* a, int n) {
     for (int i=0; i<n; i++) {
         printf("%d ", a[i]);
@@ -94,21 +123,8 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-// double calculateBandwidthGBs(int values, int rows, int cols, double timeMs) {
-//     size_t COO_size = values * (sizeof(int) + sizeof(int) + sizeof(double)); // COO size in bytes
-//     size_t vector_size = cols * sizeof(double); // Dense vector size in bytes
-//     size_t output_size = rows * sizeof(double); // Output vector size in bytes
-//     size_t bytesAccessed = COO_size + vector_size + output_size;
-
-//     // Convert ms to seconds and bytes to GB
-//     double timeS = timeMs * 1e-3;
-//     double dataGB = bytesAccessed * 1e-9;
-    
-//     return dataGB / timeS;
-// }
-
 // GLOBAL VARIABLES
-int ITERATIONS = 11;
+int ITERATIONS = 51;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -403,7 +419,7 @@ int main(int argc, char *argv[]) {
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
-        printf("Kernel completed in %fms\n", e_time);
+        // printf("Kernel completed in %fms\n", e_time);
         if (first == 1) {
             first = 0;
         } else {
@@ -418,7 +434,7 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    // printf("Bandwidth: %f GB/s\n", calculateBandwidthGBs(values, rows, cols, avg_time));
+    compute_band_gflops(rows, cols, values, avg_time, Acols, estimated_slices);
 
     fclose(fin);
     
