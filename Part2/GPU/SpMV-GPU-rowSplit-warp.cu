@@ -3,28 +3,46 @@
 #include <string.h>
 
 __global__
-void spmv(int *row_pointer, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
     int row = blockIdx.x;
-    int lane = threadIdx.x & 31; // Compute bitwise AND instead of modulo for performance
+    int lane = threadIdx.x % 32;
     
     if (row < rows) {
         double sum = 0.0;
-        int start_pos = row_pointer[row];
-        int end_pos = row_pointer[row+1];
+        
+        // Binary search to find the starting position for this row
+        int left = 0;
+        int right = values - 1;
+        int start_pos = 0;
+        
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+            if (Arows[mid] < row) {
+                left = mid + 1;
+            } else if (Arows[mid] > row) {
+                right = mid - 1;
+            } else {
+                // We found a match, but need to find the first occurrence
+                start_pos = mid;
+                right = mid - 1;
+            }
+        }
+        
+        // If we didn't find an exact match, left is the insertion point
+        if (Arows[start_pos] != row && left < values) {
+            start_pos = left;
+        }
         
         // Each thread processes elements in stride
-        // SInce we use vector v only for reading, we can use __ldg for performance
-        for (int i = start_pos + lane; i < end_pos; i += 32) {
+        for (int i = start_pos + lane; i < values && Arows[i] == row; i += 32) {
             sum += Avals[i] * __ldg(&v[Acols[i]]);
         }
         
-        // Warp-level reduction with loop unrolling for performance
-        // Use __shfl_down_sync for warp-level communication
-        sum += __shfl_down_sync(0xffffffff, sum, 16);
-        sum += __shfl_down_sync(0xffffffff, sum, 8);
-        sum += __shfl_down_sync(0xffffffff, sum, 4);
-        sum += __shfl_down_sync(0xffffffff, sum, 2);
-        sum += __shfl_down_sync(0xffffffff, sum, 1);
+        // Warp-level reduction
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset /= 2) {
+            sum += __shfl_down_sync(0xffffffff, sum, offset);
+        }
         
         if (lane == 0) {
             C[row] = sum;
@@ -55,55 +73,7 @@ void print_matrix(double* m, int rows, int cols) {
     }
 }
 
-// Compute bandwidth and flops
-void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Acols) {
-    // Bytes read from the CSR
-    size_t csr_size = (size_t)(sizeof(int) * values + sizeof(int) * (rows+1) + sizeof(double) * values);
-    // Bytes read from the dense vector
-    int* unique_cols = (int*)calloc(cols, sizeof(int));
-    int unique_count = 0;
-    for (int i=0; i<values; i++) {
-        if (unique_cols[Acols[i]] == 0) {
-            unique_cols[Acols[i]] = 1;
-            unique_count += 1;
-        }
-    }
-    size_t vector_size = (size_t)(sizeof(double) * unique_count);
-    // Total bytes read
-    size_t bytes_read = csr_size + vector_size;
-    // Bytes written
-    size_t bytes_written = (size_t)(sizeof(double) * rows);
-    size_t total_bytes = bytes_read + bytes_written;
-
-    // GFLOPS
-    double bandwidth = total_bytes / (time_ms * 1.0e6);
-    double operations = 2.0 * values;
-    double gflops = operations / (time_ms * 1.0e6);
-
-    printf("Bandwidth: %f GB/s\n", bandwidth);
-    printf("FLOPS: %f GFLOPS\n", gflops);
-}
-
-
-void init_row_pointer(int *Arows, int *row_pointer, int values, int rows) {
-    row_pointer[0] = 0;
-    int counter = 0;
-    int last_pos = 0;
-    for (int i=0; i<rows; i++) {
-        for (int j=last_pos; j<values; j++) {
-            if (Arows[j] == i) {
-                counter += 1;
-            } else {
-                last_pos = j;
-                row_pointer[i+1] = counter;
-                break;
-            }
-        }
-    }
-    row_pointer[rows] = counter;
-}
-
-int ITERATIONS = 51;
+int ITERATIONS = 11;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -168,12 +138,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Create CSR's row pointer
-    int* row_pointer;
-    cudaMallocManaged(&row_pointer, (rows + 1) * sizeof(int));
-    init_row_pointer(Arows, row_pointer, values, rows);
-    cudaFree(Arows); // Use cudaFree instead of free
-
     // Create dense vector using cudaMallocManaged
     double *v;
     cudaMallocManaged(&v, cols*sizeof(double));
@@ -196,9 +160,18 @@ int main(int argc, char *argv[]) {
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
         
+        // Prefetch data to GPU
+        int device = -1;
+        cudaGetDevice(&device);
+        cudaMemPrefetchAsync(Arows, values*sizeof(int), device, NULL);
+        cudaMemPrefetchAsync(Acols, values*sizeof(int), device, NULL);
+        cudaMemPrefetchAsync(Avals, values*sizeof(double), device, NULL);
+        cudaMemPrefetchAsync(v, cols*sizeof(double), device, NULL);
+        cudaMemPrefetchAsync(C, rows*sizeof(double), device, NULL);
+        
         cudaEventRecord(start);
 
-        spmv<<<blocksPerGrid, threadsPerBlock>>>(row_pointer, Acols, Avals, v, C, rows, cols, values);
+        spmv<<<blocksPerGrid, threadsPerBlock>>>(Arows, Acols, Avals, v, C, rows, cols, values);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
@@ -209,6 +182,7 @@ int main(int argc, char *argv[]) {
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
+        printf("Kernel completed in %fms\n", e_time);
         if (first == 1) {
             first = 0;
         } else {
@@ -223,14 +197,13 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    compute_band_gflops(rows, cols, values, avg_time, Acols);
 
     fclose(fin);
     
     // Free using cudaFree instead of free
+    cudaFree(Arows);
     cudaFree(Acols);
     cudaFree(Avals);
-    cudaFree(row_pointer);
     cudaFree(v);
     cudaFree(C);
 
