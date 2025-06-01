@@ -5,19 +5,39 @@
 __global__
 void spmv(int *row_pointer, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
     int row = blockIdx.x;
-    int lane = threadIdx.x;  // Remove & 31 since threadIdx.x is already 0-31
+    int lane = threadIdx.x;
     
-    if (row < rows && threadIdx.x < 32) {  // Ensure we're within warp bounds
+    // Shared memory for row data
+    extern __shared__ char shared_mem[];
+    int *shared_cols = (int*)shared_mem;
+    double *shared_vals = (double*)(shared_mem + 32 * sizeof(int));
+    
+    if (row < rows && threadIdx.x < 32) {
         double sum = 0.0;
         int start_pos = row_pointer[row];
         int end_pos = row_pointer[row+1];
+        int row_nnz = end_pos - start_pos;
         
-        // Each thread processes elements in stride
-        for (int i = start_pos + lane; i < end_pos; i += 32) {
-            sum += Avals[i] * __ldg(&v[Acols[i]]);
+        // Load row data into shared memory in chunks
+        for (int chunk_start = 0; chunk_start < row_nnz; chunk_start += 32) {
+            int chunk_size = min(32, row_nnz - chunk_start);
+            
+            // Cooperatively load chunk into shared memory
+            if (lane < chunk_size) {
+                int global_idx = start_pos + chunk_start + lane;
+                shared_cols[lane] = Acols[global_idx];
+                shared_vals[lane] = Avals[global_idx];
+            }
+            __syncwarp();
+            
+            // Process chunk from shared memory
+            if (lane < chunk_size) {
+                sum += shared_vals[lane] * __ldg(&v[shared_cols[lane]]);
+            }
+            __syncwarp();
         }
         
-        // Warp-level reduction
+        // Warp-level reduction with loop unrolling
         sum += __shfl_down_sync(0xffffffff, sum, 16);
         sum += __shfl_down_sync(0xffffffff, sum, 8);
         sum += __shfl_down_sync(0xffffffff, sum, 4);
@@ -226,7 +246,8 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(start);
 
-        spmv<<<blocksPerGrid, threadsPerBlock>>>(row_pointer, csr_cols, csr_vals, v, C, rows, cols, values);
+        int shared_mem_size = 32 * (sizeof(int) + sizeof(double)); // For approach 2
+        spmv<<<blocksPerGrid, threadsPerBlock, shared_mem_size>>>(row_pointer, csr_cols, csr_vals, v, C, rows, cols, values);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
