@@ -4,19 +4,9 @@
 #include <math.h>
 
 __global__
-void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C,
+                            int values, int tile_size) {
 
-    if (tid < values) {
-        double product = Avals[tid] * v[Acols[tid]];
-        atomicAdd(&C[Arows[tid]], product);
-    }
-}
-
-// Option 2: 2D tiled approach with advanced memory management
-__global__
-void spmv_2d_tiled_advanced(int *Arows, int *Acols, double *Avals, double *v, double *C,
-                           int values, int tile_size) {
     // 2D grid of tiles
     int tile_x = blockIdx.x;
     int tile_y = blockIdx.y;
@@ -30,7 +20,6 @@ void spmv_2d_tiled_advanced(int *Arows, int *Acols, double *Avals, double *v, do
     int *tile_cols = (int*)&tile_vector[blockDim.x * blockDim.y];
     int *tile_rows = &tile_cols[blockDim.x * blockDim.y];
     
-    // Calculate global indices with 2D mapping
     int elements_per_tile = blockDim.x * blockDim.y;
     int tile_start = (tile_y * gridDim.x + tile_x) * elements_per_tile;
     int local_idx = tid_y * blockDim.x + tid_x;
@@ -54,21 +43,46 @@ void spmv_2d_tiled_advanced(int *Arows, int *Acols, double *Avals, double *v, do
     // Prefetch vector elements with 2D access pattern
     double result = 0.0;
     if (global_idx < values && tile_rows[local_idx] != -1) {
-        // Use texture-like access pattern
-        int col = tile_cols[local_idx];
-        double v_val = v[col];
-        result = tile_vals[local_idx] * v_val;
+        // Use ldg for read-only access to vector
+        result = tile_vals[local_idx] * __ldg(&v[tile_cols[local_idx]]);
     }
     
-    // 2D warp-level reduction
-    // Reduce within warps first (32 threads)
-    for (int offset = 16; offset > 0; offset /= 2) {
-        double other_result = __shfl_down_sync(0xFFFFFFFF, result, offset);
-        int other_row = __shfl_down_sync(0xFFFFFFFF, 
-                                        (global_idx < values) ? tile_rows[local_idx] : -1, offset);
-        if (other_row == tile_rows[local_idx] && tile_rows[local_idx] != -1) {
-            result += other_result;
-        }
+    // 2D warp-level reduction with loop unrolling
+    int current_row = (global_idx < values) ? tile_rows[local_idx] : -1;
+    
+    // offset = 16
+    double other_result = __shfl_down_sync(0xFFFFFFFF, result, 16);
+    int other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 16);
+    if (other_row == current_row && current_row != -1) { // Only sum partial results for the same row
+        result += other_result;
+    }
+    
+    // offset = 8
+    other_result = __shfl_down_sync(0xFFFFFFFF, result, 8);
+    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 8);
+    if (other_row == current_row && current_row != -1) {
+        result += other_result;
+    }
+    
+    // offset = 4
+    other_result = __shfl_down_sync(0xFFFFFFFF, result, 4);
+    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 4);
+    if (other_row == current_row && current_row != -1) {
+        result += other_result;
+    }
+    
+    // offset = 2
+    other_result = __shfl_down_sync(0xFFFFFFFF, result, 2);
+    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 2);
+    if (other_row == current_row && current_row != -1) {
+        result += other_result;
+    }
+    
+    // offset = 1
+    other_result = __shfl_down_sync(0xFFFFFFFF, result, 1);
+    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 1);
+    if (other_row == current_row && current_row != -1) {
+        result += other_result;
     }
     
     // Write back with reduced atomic pressure
@@ -234,7 +248,7 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(start);
 
-        spmv_2d_tiled_advanced<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(
+        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(
         Arows, Acols, Avals, v, C, values, tile_size);
         
         cudaEventRecord(stop);
