@@ -3,56 +3,62 @@
 #include <string.h>
 
 __global__
-void spmv(int *row_pointer, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    int row = blockIdx.x;
-    int lane = threadIdx.x;  // Remove & 31 since threadIdx.x is already 0-31
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid < values) {
+        double product = Avals[tid] * v[Acols[tid]];
+        atomicAdd(&C[Arows[tid]], product);
+    }
+}
+
+// Option 2: Merge-based SpMV (good for sorted matrices)
+__global__
+void spmv_merge_based(int *Arows, int *Acols, double *Avals, double *v, double *C, 
+                      int values, int rows) {
+    extern __shared__ double sdata[];
     
-    if (row < rows && threadIdx.x < 32) {  // Ensure we're within warp bounds
-        double sum = 0.0;
-        int start_pos = row_pointer[row];
-        int end_pos = row_pointer[row+1];
-        
-        // Each thread processes elements in stride
-        for (int i = start_pos + lane; i < end_pos; i += 32) {
-            sum += Avals[i] * __ldg(&v[Acols[i]]);
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int block_start = blockIdx.x * blockDim.x;
+    int block_end = min((blockIdx.x + 1) * blockDim.x, values);
+    
+    // Load block of data into shared memory
+    double local_sum = 0.0;
+    int current_row = -1;
+    
+    if (tid < values) {
+        current_row = Arows[tid];
+        local_sum = Avals[tid] * v[Acols[tid]];
+    }
+    
+    sdata[threadIdx.x] = local_sum;
+    __syncthreads();
+    
+    // Merge within block for same rows
+    for (int stride = 1; stride < blockDim.x; stride *= 2) {
+        if (threadIdx.x >= stride && tid < values) {
+            int other_tid = tid - stride;
+            if (other_tid >= block_start && Arows[other_tid] == current_row) {
+                sdata[threadIdx.x] += sdata[threadIdx.x - stride];
+            }
         }
-        
-        // Warp-level reduction
-        sum += __shfl_down_sync(0xffffffff, sum, 16);
-        sum += __shfl_down_sync(0xffffffff, sum, 8);
-        sum += __shfl_down_sync(0xffffffff, sum, 4);
-        sum += __shfl_down_sync(0xffffffff, sum, 2);
-        sum += __shfl_down_sync(0xffffffff, sum, 1);
-        
-        if (lane == 0) {
-            C[row] = sum;
+        __syncthreads();
+    }
+    
+    // Write results for row boundaries
+    if (tid < values) {
+        bool is_boundary = (tid == values - 1) || 
+                          (tid + 1 < values && Arows[tid] != Arows[tid + 1]);
+        if (is_boundary) {
+            atomicAdd(&C[current_row], sdata[threadIdx.x]);
         }
-    }
-}
-
-void print_int_array(int* a, int n) {
-    for (int i=0; i<n; i++) {
-        printf("%d ", a[i]);
-    }
-    printf("\n");
-}
-
-void print_double_array(double* a, int n) {
-    for (int i=0; i<n; i++) {
-        printf("%f\n", a[i]);
-    }
-}
-
-void print_matrix(double* m, int rows, int cols) {
-    for (int i=0; i<rows*cols; i++) {
-        printf("%f\n", m[i]);
     }
 }
 
 // Compute bandwidth and flops
 void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Acols) {
-    // Bytes read from the CSR
-    size_t csr_size = (size_t)(sizeof(int) * values + sizeof(int) * (rows+1) + sizeof(double) * values);
+    // Bytes read from the COO
+    size_t coo_size = (size_t)(sizeof(int) * (2 * values) + sizeof(double) * values);
     // Bytes read from the dense vector
     int* unique_cols = (int*)calloc(cols, sizeof(int));
     int unique_count = 0;
@@ -64,7 +70,7 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
     }
     size_t vector_size = (size_t)(sizeof(double) * unique_count);
     // Total bytes read
-    size_t bytes_read = csr_size + vector_size;
+    size_t bytes_read = coo_size + vector_size;
     // Bytes written
     size_t bytes_written = (size_t)(sizeof(double) * rows);
     size_t total_bytes = bytes_read + bytes_written;
@@ -78,59 +84,52 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
     printf("FLOPS: %f GFLOPS\n", gflops);
 }
 
-
-void convert_coo_to_csr(int *Arows, int *Acols, double *Avals, 
-                        int **csr_cols, double **csr_vals, int *row_pointer, 
-                        int values, int rows) {
-    // Initialize row pointer
-    for (int i = 0; i <= rows; i++) {
-        row_pointer[i] = 0;
+void print_int_array(int* a, int n) {
+    for (int i=0; i<n; i++) {
+        printf("%d ", a[i]);
     }
-    
-    // Count elements per row with bounds checking
-    for (int i = 0; i < values; i++) {
-        if (Arows[i] >= 0 && Arows[i] < rows) {
-            row_pointer[Arows[i] + 1]++;
-        }
-    }
-    
-    // Convert counts to cumulative offsets
-    for (int i = 1; i <= rows; i++) {
-        row_pointer[i] += row_pointer[i-1];
-    }
-    
-    // Allocate CSR arrays
-    cudaMallocManaged(csr_cols, values * sizeof(int));
-    cudaMallocManaged(csr_vals, values * sizeof(double));
-    
-    // Create temporary copy of row_pointer for insertion
-    int *temp_row_ptr = (int*)malloc((rows + 1) * sizeof(int));
-    for (int i = 0; i <= rows; i++) {
-        temp_row_ptr[i] = row_pointer[i];
-    }
-    
-    // Fill CSR arrays with bounds checking
-    for (int i = 0; i < values; i++) {
-        int row = Arows[i];
-        if (row >= 0 && row < rows) {
-            int pos = temp_row_ptr[row]++;
-            if (pos < values) {
-                (*csr_cols)[pos] = Acols[i];
-                (*csr_vals)[pos] = Avals[i];
-            }
-        }
-    }
-    
-    free(temp_row_ptr);
+    printf("\n");
 }
 
-int ITERATIONS = 51;
+void print_double_array(double* a, int n) {
+    for (int i=0; i<n; i++) {
+        printf("%f ", a[i]);
+    }
+    printf("\n");
+}
+
+void print_matrix(double* m, int rows, int cols) {
+    for (int i=0; i<rows; i++) {
+        for (int j=0; j<cols; j++) {
+            printf("%f ", m[i*cols+j]);
+        }
+        printf("\n");
+    }
+}
+
+#define ITERATIONS 51
+#define DEFAULT_THREADS_PER_BLOCK 256
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "Usage: %s <input_file> [threads_per_block]\n", argv[0]);
         return 1;
     }
+
+    // Parse threads per block parameter
+    int threadsPerBlock = DEFAULT_THREADS_PER_BLOCK;
+    if (argc == 3) {
+        int user_threads = atoi(argv[2]);
+        if (user_threads > 0) {
+            threadsPerBlock = user_threads;
+        } else {
+            fprintf(stderr, "Warning: Invalid threads per block value, using default (%d)\n", 
+                    DEFAULT_THREADS_PER_BLOCK);
+        }
+    }
+    
+    printf("Using %d threads per block\n", threadsPerBlock);
+    printf("Used matrix: %s\n", argv[1]);
 
     FILE *fin = fopen(argv[1], "r");
 
@@ -189,19 +188,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Convert COO to CSR
-    int* row_pointer;
-    int* csr_cols;
-    double* csr_vals;
-    cudaMallocManaged(&row_pointer, (rows + 1) * sizeof(int));
-    
-    convert_coo_to_csr(Arows, Acols, Avals, &csr_cols, &csr_vals, row_pointer, values, rows);
-    
-    // Free original COO arrays
-    cudaFree(Arows);
-    cudaFree(Acols);
-    cudaFree(Avals);
-
     // Create dense vector using cudaMallocManaged
     double *v;
     cudaMallocManaged(&v, cols*sizeof(double));
@@ -214,10 +200,12 @@ int main(int argc, char *argv[]) {
     cudaMallocManaged(&C, rows*sizeof(double));
     
     // Perform SpMV
-    int threadsPerBlock = 32;  // One warp per row
-    int blocksPerGrid = rows;  // One block per row
+    int N = values;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
     cudaEvent_t start, stop;
+
+    first = 1;
 
     for (int i=0; i<ITERATIONS; i++) {
         cudaMemset(C, 0, rows * sizeof(double));
@@ -226,17 +214,18 @@ int main(int argc, char *argv[]) {
         
         cudaEventRecord(start);
 
-        spmv<<<blocksPerGrid, threadsPerBlock>>>(row_pointer, csr_cols, csr_vals, v, C, rows, cols, values);
+        // When launching the kernel:
+        size_t sharedMemSize = threadsPerBlock * sizeof(double);
+        spmv_merge_based<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(
+            Arows, Acols, Avals, v, C, values, rows);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         
-        // Ensure all operations are completed
-        cudaDeviceSynchronize();
-        
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
         // print_double_array(C, rows);
+        // printf("Kernel completed in %fms\n", e_time);
         if (first == 1) {
             first = 0;
         } else {
@@ -251,14 +240,14 @@ int main(int argc, char *argv[]) {
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
-    compute_band_gflops(rows, cols, values, avg_time, csr_cols);
+    compute_band_gflops(rows, cols, values, avg_time, Acols);
 
     fclose(fin);
     
     // Free using cudaFree instead of free
-    cudaFree(csr_cols);
-    cudaFree(csr_vals);
-    cudaFree(row_pointer);
+    cudaFree(Arows);
+    cudaFree(Acols);
+    cudaFree(Avals);
     cudaFree(v);
     cudaFree(C);
 
