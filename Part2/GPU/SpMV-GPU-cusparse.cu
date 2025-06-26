@@ -2,92 +2,16 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <cusparse.h>
 
+// Reference basic SpMV kernel for comparison
 __global__
-void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C,
-                            int values, int tile_size) {
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // 2D grid of tiles
-    int tile_x = blockIdx.x;
-    int tile_y = blockIdx.y;
-    int tid_x = threadIdx.x;
-    int tid_y = threadIdx.y;
-    
-    // Shared memory for tiling
-    extern __shared__ double shared_data[];
-    double *tile_vals = shared_data;
-    double *tile_vector = &shared_data[blockDim.x * blockDim.y];
-    int *tile_cols = (int*)&tile_vector[blockDim.x * blockDim.y];
-    int *tile_rows = &tile_cols[blockDim.x * blockDim.y];
-    
-    int elements_per_tile = blockDim.x * blockDim.y;
-    int tile_start = (tile_y * gridDim.x + tile_x) * elements_per_tile;
-    int local_idx = tid_y * blockDim.x + tid_x;
-    int global_idx = tile_start + local_idx;
-    
-    // Cooperative loading into shared memory with banking optimization
-    // Use different access patterns to avoid bank conflicts
-    int bank_offset = (local_idx / 32) * 33; // Avoid bank conflicts
-    
-    if (global_idx < values) {
-        tile_vals[local_idx] = Avals[global_idx];
-        tile_cols[local_idx] = Acols[global_idx];
-        tile_rows[local_idx] = Arows[global_idx];
-    } else {
-        tile_vals[local_idx] = 0.0;
-        tile_cols[local_idx] = 0;
-        tile_rows[local_idx] = -1;
-    }
-    __syncthreads();
-    
-    // Prefetch vector elements with 2D access pattern
-    double result = 0.0;
-    if (global_idx < values && tile_rows[local_idx] != -1) {
-        // Use ldg for read-only access to vector
-        result = tile_vals[local_idx] * __ldg(&v[tile_cols[local_idx]]);
-    }
-    
-    // 2D warp-level reduction with loop unrolling
-    int current_row = (global_idx < values) ? tile_rows[local_idx] : -1;
-    
-    // offset = 16
-    double other_result = __shfl_down_sync(0xFFFFFFFF, result, 16);
-    int other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 16);
-    if (other_row == current_row && current_row != -1) { // Only sum partial results for the same row
-        result += other_result;
-    }
-    
-    // offset = 8
-    other_result = __shfl_down_sync(0xFFFFFFFF, result, 8);
-    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 8);
-    if (other_row == current_row && current_row != -1) {
-        result += other_result;
-    }
-    
-    // offset = 4
-    other_result = __shfl_down_sync(0xFFFFFFFF, result, 4);
-    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 4);
-    if (other_row == current_row && current_row != -1) {
-        result += other_result;
-    }
-    
-    // offset = 2
-    other_result = __shfl_down_sync(0xFFFFFFFF, result, 2);
-    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 2);
-    if (other_row == current_row && current_row != -1) {
-        result += other_result;
-    }
-    
-    // offset = 1
-    other_result = __shfl_down_sync(0xFFFFFFFF, result, 1);
-    other_row = __shfl_down_sync(0xFFFFFFFF, current_row, 1);
-    if (other_row == current_row && current_row != -1) {
-        result += other_result;
-    }
-    
-    // Write back with reduced atomic pressure
-    if ((local_idx % 32) == 0 && global_idx < values && tile_rows[local_idx] != -1) {
-        atomicAdd(&C[tile_rows[local_idx]], result);
+    if (tid < values) {
+        double product = Avals[tid] * v[Acols[tid]];
+        atomicAdd(&C[Arows[tid]], product);
     }
 }
 
@@ -104,6 +28,7 @@ void compute_band_gflops(int rows, int cols, int values, double time_ms, int* Ac
             unique_count += 1;
         }
     }
+    free(unique_cols);
     size_t vector_size = (size_t)(sizeof(double) * unique_count);
     // Total bytes read
     size_t bytes_read = coo_size + vector_size;
@@ -192,7 +117,7 @@ int main(int argc, char *argv[]) {
                 cols = atoi(split_buffer[1]);
                 values = atoi(split_buffer[2]);
                 
-                // Use cudaMallocManaged instead of malloc
+                // Use cudaMallocManaged for COO data
                 cudaMallocManaged(&Arows, values*sizeof(int));
                 cudaMallocManaged(&Acols, values*sizeof(int));
                 cudaMallocManaged(&Avals, values*sizeof(double));
@@ -222,42 +147,61 @@ int main(int argc, char *argv[]) {
     double *C;
     cudaMallocManaged(&C, rows*sizeof(double));
     
-    // For 2D tiled SpMV
-    // Define tile dimensions - e.g., 16x16 = 256 threads per block
-    int tile_dim_x = 16; 
-    int tile_dim_y = 16;
-    int tile_size = tile_dim_x * tile_dim_y;
-
-    // Calculate grid dimensions
-    int tiles_x = (int)ceil(sqrt((double)values / tile_size));
-    int tiles_y = (values + tiles_x * tile_size - 1) / (tiles_x * tile_size);
-
-    dim3 threadsPerBlock(tile_dim_x, tile_dim_y);
-    dim3 blocksPerGrid(tiles_x, tiles_y);
-
-    size_t sharedMemSize = tile_size * (2 * sizeof(double) + 2 * sizeof(int));
+    // Initialize cuSPARSE
+    cusparseHandle_t handle;
+    cusparseCreate(&handle);
+    
+    // Create matrix descriptor for COO format
+    cusparseSpMatDescr_t matA;
+    cusparseDnVecDescr_t vecX, vecY;
+    
+    // Create sparse matrix in COO format
+    cusparseCreateCoo(&matA, rows, cols, values,
+                      Arows, Acols, Avals,
+                      CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+    
+    // Create dense vectors
+    cusparseCreateDnVec(&vecX, cols, v, CUDA_R_64F);
+    cusparseCreateDnVec(&vecY, rows, C, CUDA_R_64F);
+    
+    // Scalars for SpMV operation: y = alpha * A * x + beta * y
+    double alpha = 1.0, beta = 0.0;
+    
+    // Calculate buffer size for SpMV
+    size_t bufferSize = 0;
+    cusparseSpMV_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                           &alpha, matA, vecX, &beta, vecY, CUDA_R_64F,
+                           CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize);
+    
+    // Allocate buffer
+    void* dBuffer = NULL;
+    if (bufferSize > 0) {
+        cudaMalloc(&dBuffer, bufferSize);
+    }
 
     cudaEvent_t start, stop;
-
     first = 1;
 
     for (int i=0; i<ITERATIONS; i++) {
+        // Reset output vector
         cudaMemset(C, 0, rows * sizeof(double));
+        
         cudaEventCreate(&start);
         cudaEventCreate(&stop);
         
         cudaEventRecord(start);
 
-        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(
-        Arows, Acols, Avals, v, C, values, tile_size);
+        // Perform SpMV using cuSPARSE: C = alpha * A * v + beta * C
+        cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                     &alpha, matA, vecX, &beta, vecY, CUDA_R_64F,
+                     CUSPARSE_SPMV_ALG_DEFAULT, dBuffer);
         
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         
         float e_time = 0;
         cudaEventElapsedTime(&e_time, start, stop);
-        // print_double_array(C, rows);
-        // printf("Kernel completed in %fms\n", e_time);
+        
         if (first == 1) {
             first = 0;
         } else {
@@ -267,16 +211,25 @@ int main(int argc, char *argv[]) {
         cudaEventDestroy(start);
         cudaEventDestroy(stop);
     }
-    // print_double_array(C, rows);
 
     // Calculate average time
     double avg_time = totalTime / (ITERATIONS - 1);
     printf("Average time: %fms\n", avg_time);
     compute_band_gflops(rows, cols, values, avg_time, Acols);
 
+    // Cleanup cuSPARSE resources
+    cusparseDestroySpMat(matA);
+    cusparseDestroyDnVec(vecX);
+    cusparseDestroyDnVec(vecY);
+    cusparseDestroy(handle);
+    
+    if (dBuffer) {
+        cudaFree(dBuffer);
+    }
+
     fclose(fin);
     
-    // Free using cudaFree instead of free
+    // Free memory
     cudaFree(Arows);
     cudaFree(Acols);
     cudaFree(Avals);

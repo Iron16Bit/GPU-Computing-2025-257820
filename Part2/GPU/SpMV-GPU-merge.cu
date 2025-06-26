@@ -1,20 +1,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
+    
 __global__
-void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, int rows, int cols, int values) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (tid < values) {
-        double product = Avals[tid] * v[Acols[tid]];
-        atomicAdd(&C[Arows[tid]], product);
-    }
-}
-
-// Option 2: Merge-based SpMV (good for sorted matrices)
-__global__
-void spmv_merge_based(int *Arows, int *Acols, double *Avals, double *v, double *C, 
+void spmv(int *Arows, int *Acols, double *Avals, double *v, double *C, 
                       int values, int rows) {
     extern __shared__ double sdata[];
     
@@ -28,21 +17,97 @@ void spmv_merge_based(int *Arows, int *Acols, double *Avals, double *v, double *
     
     if (tid < values) {
         current_row = Arows[tid];
-        local_sum = Avals[tid] * v[Acols[tid]];
+        local_sum = Avals[tid] * __ldg(&v[Acols[tid]]);
     }
     
     sdata[threadIdx.x] = local_sum;
     __syncthreads();
     
-    // Merge within block for same rows
-    for (int stride = 1; stride < blockDim.x; stride *= 2) {
-        if (threadIdx.x >= stride && tid < values) {
-            int other_tid = tid - stride;
+    // Unrolled merge within block for same rows
+    if (blockDim.x >= 1024) {
+        if (threadIdx.x >= 512 && tid < values) {
+            int other_tid = tid - 512;
             if (other_tid >= block_start && Arows[other_tid] == current_row) {
-                sdata[threadIdx.x] += sdata[threadIdx.x - stride];
+                sdata[threadIdx.x] += sdata[threadIdx.x - 512];
             }
         }
         __syncthreads();
+    }
+    
+    if (blockDim.x >= 512) {
+        if (threadIdx.x >= 256 && tid < values) {
+            int other_tid = tid - 256;
+            if (other_tid >= block_start && Arows[other_tid] == current_row) {
+                sdata[threadIdx.x] += sdata[threadIdx.x - 256];
+            }
+        }
+        __syncthreads();
+    }
+    
+    if (blockDim.x >= 256) {
+        if (threadIdx.x >= 128 && tid < values) {
+            int other_tid = tid - 128;
+            if (other_tid >= block_start && Arows[other_tid] == current_row) {
+                sdata[threadIdx.x] += sdata[threadIdx.x - 128];
+            }
+        }
+        __syncthreads();
+    }
+    
+    if (blockDim.x >= 128) {
+        if (threadIdx.x >= 64 && tid < values) {
+            int other_tid = tid - 64;
+            if (other_tid >= block_start && Arows[other_tid] == current_row) {
+                sdata[threadIdx.x] += sdata[threadIdx.x - 64];
+            }
+        }
+        __syncthreads();
+    }
+    
+    if (blockDim.x >= 64) {
+        if (threadIdx.x >= 32 && tid < values) {
+            int other_tid = tid - 32;
+            if (other_tid >= block_start && Arows[other_tid] == current_row) {
+                sdata[threadIdx.x] += sdata[threadIdx.x - 32];
+            }
+        }
+        __syncthreads();
+    }
+    
+    // Final warp-level operations (no sync needed within warp)
+    if (threadIdx.x >= 16 && tid < values) {
+        int other_tid = tid - 16;
+        if (other_tid >= block_start && Arows[other_tid] == current_row) {
+            sdata[threadIdx.x] += sdata[threadIdx.x - 16];
+        }
+    }
+    
+    if (threadIdx.x >= 8 && tid < values) {
+        int other_tid = tid - 8;
+        if (other_tid >= block_start && Arows[other_tid] == current_row) {
+            sdata[threadIdx.x] += sdata[threadIdx.x - 8];
+        }
+    }
+    
+    if (threadIdx.x >= 4 && tid < values) {
+        int other_tid = tid - 4;
+        if (other_tid >= block_start && Arows[other_tid] == current_row) {
+            sdata[threadIdx.x] += sdata[threadIdx.x - 4];
+        }
+    }
+    
+    if (threadIdx.x >= 2 && tid < values) {
+        int other_tid = tid - 2;
+        if (other_tid >= block_start && Arows[other_tid] == current_row) {
+            sdata[threadIdx.x] += sdata[threadIdx.x - 2];
+        }
+    }
+    
+    if (threadIdx.x >= 1 && tid < values) {
+        int other_tid = tid - 1;
+        if (other_tid >= block_start && Arows[other_tid] == current_row) {
+            sdata[threadIdx.x] += sdata[threadIdx.x - 1];
+        }
     }
     
     // Write results for row boundaries
@@ -216,7 +281,7 @@ int main(int argc, char *argv[]) {
 
         // When launching the kernel:
         size_t sharedMemSize = threadsPerBlock * sizeof(double);
-        spmv_merge_based<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(
+        spmv<<<blocksPerGrid, threadsPerBlock, sharedMemSize>>>(
             Arows, Acols, Avals, v, C, values, rows);
         
         cudaEventRecord(stop);
