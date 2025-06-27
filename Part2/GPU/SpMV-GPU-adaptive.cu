@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 #include <errno.h>
+#include "my_time_lib.h"
 
 // ============== CONFIGURABLE PARAMETERS ==============
 #define DEFAULT_THREADS_PER_BLOCK 256
@@ -471,11 +472,16 @@ int main(int argc, char *argv[]) {
     // Use compile-time configured parameters
     ThresholdConfig config = get_default_config();
     
+    double time;
+    TIMER_DEF(var);
+    TIMER_START(var);
     // Analyze matrix and classify rows
     MatrixStats stats = analyze_matrix(row_lengths, rows, config);
-    
     // Classify rows by type
     RowClassification classification = classify_rows(row_lengths, rows, config);
+    TIMER_STOP(var);
+    time = TIMER_ELAPSED(var);
+    printf("Preprocessing time: %.3f ms\n", time);
 
     // Warmup and timing
     cudaEvent_t start, stop;
