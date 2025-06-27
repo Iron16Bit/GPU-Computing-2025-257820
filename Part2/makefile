@@ -56,6 +56,11 @@ $(GPU_BIN_FOLDER)/%.exec: $(GPU_FOLDER)/%.cu
 	@mkdir -p "$(GPU_BIN_FOLDER)"
 	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $<
 
+# Special rule for cuSPARSE implementation - needs cuSPARSE library
+$(GPU_BIN_FOLDER)/SpMV-GPU-cusparse.exec: $(GPU_FOLDER)/SpMV-GPU-cusparse.cu
+	@mkdir -p "$(GPU_BIN_FOLDER)"
+	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $< -lcusparse
+
 # Compile timing library object
 $(TIME_LIB_OBJ): $(SRC_FOLDER)/my_time_lib.c
 	@mkdir -p "$(BIN_FOLDER)" "$(OBJ_FOLDER)" "$(BATCH_OUT_FOLDER)"
