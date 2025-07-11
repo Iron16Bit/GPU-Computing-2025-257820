@@ -56,8 +56,16 @@ $(GPU_BIN_FOLDER)/%.exec: $(GPU_FOLDER)/%.cu
 	@mkdir -p "$(GPU_BIN_FOLDER)"
 	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $<
 
-# Special rule for adaptive implementation - needs timer library
-$(GPU_BIN_FOLDER)/SpMV-GPU-adaptive.exec: $(GPU_FOLDER)/SpMV-GPU-adaptive.cu $(TIME_LIB_OBJ)
+# Build with timer library
+$(GPU_BIN_FOLDER)/SpMV-GPU-preprocessing.exec: $(GPU_FOLDER)/SpMV-GPU-preprocessing.cu $(TIME_LIB_OBJ)
+	@mkdir -p "$(GPU_BIN_FOLDER)"
+	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $< $(TIME_LIB_OBJ) -I$(INC_FOLDER)
+
+$(GPU_BIN_FOLDER)/SpMV-GPU-hybrid-tuning.exec: $(GPU_FOLDER)/SpMV-GPU-hybrid-tuning.cu $(TIME_LIB_OBJ)
+	@mkdir -p "$(GPU_BIN_FOLDER)"
+	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $< $(TIME_LIB_OBJ) -I$(INC_FOLDER)
+
+$(GPU_BIN_FOLDER)/SpMV-GPU-hybrid-noTuning.exec: $(GPU_FOLDER)/SpMV-GPU-hybrid-noTuning.cu $(TIME_LIB_OBJ)
 	@mkdir -p "$(GPU_BIN_FOLDER)"
 	module load CUDA/12.1.1 && $(NVCC) $(GPU_ARCH) -m64 -o $@ $< $(TIME_LIB_OBJ) -I$(INC_FOLDER)
 
