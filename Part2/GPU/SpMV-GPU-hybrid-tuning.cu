@@ -175,9 +175,9 @@ struct MAT_STATS calculate_matrix_stats_gpu(const int *row_ptr, int num_rows) {
 // ============== ROW CLASSIFICATION ==============
 
 // GPU kernel for row classification
-__global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold,
-                                   int *short_rows, int *long_rows,
-                                   int *short_count, int *long_count) {
+__global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                   int *short_rows, int *long_rows, int *very_long_rows,
+                                   int *short_count, int *long_count, int *very_long_count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < n) {
@@ -186,31 +186,38 @@ __global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold,
         if (row_length <= threshold) {
             int pos = atomicAdd(short_count, 1);
             short_rows[pos] = idx;
-        } else {
+        } else if (row_length <= very_long_threshold) {
             int pos = atomicAdd(long_count, 1);
             long_rows[pos] = idx;
+        } else {
+            int pos = atomicAdd(very_long_count, 1);
+            very_long_rows[pos] = idx;
         }
     }
 }
 
 // GPU kernel for counting rows by type (first pass)
-__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold,
-                                 int *short_count, int *long_count) {
+__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                 int *short_count, int *long_count, int *very_long_count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     __shared__ int s_short[256];
     __shared__ int s_long[256];
+    __shared__ int s_very_long[256];
     
     int tid = threadIdx.x;
     s_short[tid] = 0;
     s_long[tid] = 0;
+    s_very_long[tid] = 0;
     
     if (idx < n) {
         int row_length = row_ptr[idx + 1] - row_ptr[idx];
         if (row_length <= threshold) {
             s_short[tid] = 1;
-        } else {
+        } else if (row_length <= very_long_threshold) {
             s_long[tid] = 1;
+        } else {
+            s_very_long[tid] = 1;
         }
     }
     __syncthreads();
@@ -220,6 +227,7 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold,
         if (tid < stride) {
             s_short[tid] += s_short[tid + stride];
             s_long[tid] += s_long[tid + stride];
+            s_very_long[tid] += s_very_long[tid + stride];
         }
         __syncthreads();
     }
@@ -227,63 +235,78 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold,
     if (tid == 0) {
         atomicAdd(short_count, s_short[0]);
         atomicAdd(long_count, s_long[0]);
+        atomicAdd(very_long_count, s_very_long[0]);
     }
 }
 
-void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_rows, 
-                      int *num_short, int *num_long, int threshold) {
+void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_rows, int **very_long_rows,
+                      int *num_short, int *num_long, int *num_very_long, int threshold, int very_long_threshold) {
     
     // GPU memory for counters
-    int *d_short_count, *d_long_count;
+    int *d_short_count, *d_long_count, *d_very_long_count;
     CUDA_CHECK(cudaMalloc(&d_short_count, sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_long_count, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_very_long_count, sizeof(int)));
     
     // Initialize counters
     int zero = 0;
     CUDA_CHECK(cudaMemcpy(d_short_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_very_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     
     // First pass: count rows
     int threads = 256;
     int blocks = (n + threads - 1) / threads;
-    count_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, d_short_count, d_long_count);
+    count_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold, 
+                                          d_short_count, d_long_count, d_very_long_count);
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Get counts
     CUDA_CHECK(cudaMemcpy(num_short, d_short_count, sizeof(int), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(num_long, d_long_count, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(num_very_long, d_very_long_count, sizeof(int), cudaMemcpyDeviceToHost));
     
     // Allocate arrays on host
     *short_rows = (int*)malloc(*num_short * sizeof(int));
     *long_rows = (int*)malloc(*num_long * sizeof(int));
+    *very_long_rows = (int*)malloc(*num_very_long * sizeof(int));
     
-    if (*num_short > 0 && !*short_rows) {
-        printf("Error: Failed to allocate memory for short rows\n");
-        return;
-    }
-    if (*num_long > 0 && !*long_rows) {
-        printf("Error: Failed to allocate memory for long rows\n");
-        return;
-    }
+    // if (*num_short > 0 && !*short_rows) {
+    //     printf("Error: Failed to allocate memory for short rows\n");
+    //     return;
+    // }
+    // if (*num_long > 0 && !*long_rows) {
+    //     printf("Error: Failed to allocate memory for long rows\n");
+    //     return;
+    // }
+    // if (*num_very_long > 0 && !*very_long_rows) {
+    //     printf("Error: Failed to allocate memory for very long rows\n");
+    //     return;
+    // }
     
     // GPU arrays for classification
-    int *d_short_rows, *d_long_rows;
+    int *d_short_rows, *d_long_rows, *d_very_long_rows;
     if (*num_short > 0) {
         CUDA_CHECK(cudaMalloc(&d_short_rows, *num_short * sizeof(int)));
     }
     if (*num_long > 0) {
         CUDA_CHECK(cudaMalloc(&d_long_rows, *num_long * sizeof(int)));
     }
+    if (*num_very_long > 0) {
+        CUDA_CHECK(cudaMalloc(&d_very_long_rows, *num_very_long * sizeof(int)));
+    }
     
     // Reset counters for second pass
     CUDA_CHECK(cudaMemcpy(d_short_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_very_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     
     // Second pass: populate arrays
-    classify_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold,
+    classify_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold,
                                              (*num_short > 0) ? d_short_rows : nullptr,
                                              (*num_long > 0) ? d_long_rows : nullptr,
-                                             d_short_count, d_long_count);
+                                             (*num_very_long > 0) ? d_very_long_rows : nullptr,
+                                             d_short_count, d_long_count, d_very_long_count);
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Copy results back to host
@@ -295,15 +318,20 @@ void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_r
         CUDA_CHECK(cudaMemcpy(*long_rows, d_long_rows, *num_long * sizeof(int), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaFree(d_long_rows));
     }
+    if (*num_very_long > 0) {
+        CUDA_CHECK(cudaMemcpy(*very_long_rows, d_very_long_rows, *num_very_long * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_very_long_rows));
+    }
     
     // Cleanup
     CUDA_CHECK(cudaFree(d_short_count));
     CUDA_CHECK(cudaFree(d_long_count));
+    CUDA_CHECK(cudaFree(d_very_long_count));
 }
 
-void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows, 
-                   int *num_short, int *num_long, int threshold) {
-    classify_rows_gpu(row_ptr, n, short_rows, long_rows, num_short, num_long, threshold);
+void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows, int **very_long_rows,
+                   int *num_short, int *num_long, int *num_very_long, int threshold, int very_long_threshold) {
+    classify_rows_gpu(row_ptr, n, short_rows, long_rows, very_long_rows, num_short, num_long, num_very_long, threshold, very_long_threshold);
 }
 
 // ============== KERNEL FORWARD DECLARATION ==============
@@ -311,8 +339,9 @@ void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows,
 __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
-                                              const int *long_rows, int num_short, 
-                                              int num_long, int short_blocks);
+                                              const int *long_rows, const int *very_long_rows,
+                                              int num_short, int num_long, int num_very_long,
+                                              int short_blocks, int long_blocks, int block_offset = 0);
 
 // ============== ADAPTIVE LAUNCH CONFIGURATION ==============
 
@@ -331,22 +360,24 @@ struct TuningParams {
 };
 
 // Benchmark a specific configuration and return performance score
-double benchmark_configuration(int threads, int threshold, 
+double benchmark_configuration(int threads, int threshold, int very_long_threshold,
                               const double *csr_vals, const int *row_ptr, const int *csr_cols,
                               const double *v, double *C, int rows, int cols, int values) {
     
     // Classify rows with current threshold
-    int *short_rows, *long_rows;
-    int num_short, num_long;
-    classify_rows(row_ptr, rows, &short_rows, &long_rows, &num_short, &num_long, threshold);
+    int *short_rows, *long_rows, *very_long_rows;
+    int num_short, num_long, num_very_long;
+    classify_rows(row_ptr, rows, &short_rows, &long_rows, &very_long_rows, 
+                  &num_short, &num_long, &num_very_long, threshold, very_long_threshold);
     
     // Calculate blocks configuration
     int short_blocks_limit = (num_short + threads - 1) / threads;
     int long_blocks = (num_long + (threads / WARP_SIZE) - 1) / (threads / WARP_SIZE);
-    int total_blocks = short_blocks_limit + long_blocks;
+    int very_long_blocks = num_very_long; // 1 block per very long row
+    int regular_blocks = short_blocks_limit + long_blocks;
     
     // Transfer row arrays to GPU
-    int *d_short_rows = nullptr, *d_long_rows = nullptr;
+    int *d_short_rows = nullptr, *d_long_rows = nullptr, *d_very_long_rows = nullptr;
     if (num_short > 0) {
         CUDA_CHECK(cudaMalloc(&d_short_rows, num_short * sizeof(int)));
         CUDA_CHECK(cudaMemcpy(d_short_rows, short_rows, num_short * sizeof(int), cudaMemcpyHostToDevice));
@@ -355,10 +386,18 @@ double benchmark_configuration(int threads, int threshold,
         CUDA_CHECK(cudaMalloc(&d_long_rows, num_long * sizeof(int)));
         CUDA_CHECK(cudaMemcpy(d_long_rows, long_rows, num_long * sizeof(int), cudaMemcpyHostToDevice));
     }
+    if (num_very_long > 0) {
+        CUDA_CHECK(cudaMalloc(&d_very_long_rows, num_very_long * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(d_very_long_rows, very_long_rows, num_very_long * sizeof(int), cudaMemcpyHostToDevice));
+    }
     
     // Benchmark with multiple runs
     const int benchmark_iterations = 5;
     double total_time = 0.0;
+    
+    // Parameters for very long rows
+    int very_long_block_size = 1024;
+    size_t very_long_shared_mem = very_long_block_size * sizeof(double);
     
     for (int i = 0; i < benchmark_iterations; i++) {
         CUDA_CHECK(cudaMemset(C, 0, rows * sizeof(double)));
@@ -368,9 +407,21 @@ double benchmark_configuration(int threads, int threshold,
         CUDA_CHECK(cudaEventCreate(&stop));
         CUDA_CHECK(cudaEventRecord(start));
         
-        hybrid_adaptive_spmv_optimized<<<total_blocks, threads>>>(
-            csr_vals, row_ptr, csr_cols, v, C, rows, 
-            d_short_rows, d_long_rows, num_short, num_long, short_blocks_limit);
+        // Launch short and long rows together
+        if (regular_blocks > 0) {
+            hybrid_adaptive_spmv_optimized<<<regular_blocks, threads>>>(
+                csr_vals, row_ptr, csr_cols, v, C, rows, 
+                d_short_rows, d_long_rows, d_very_long_rows,
+                num_short, num_long, num_very_long, short_blocks_limit, long_blocks, 0);
+        }
+        
+        // Launch very long rows separately with optimal block size
+        if (very_long_blocks > 0) {
+            hybrid_adaptive_spmv_optimized<<<very_long_blocks, very_long_block_size, very_long_shared_mem>>>(
+                csr_vals, row_ptr, csr_cols, v, C, rows, 
+                d_short_rows, d_long_rows, d_very_long_rows,
+                num_short, num_long, num_very_long, short_blocks_limit, long_blocks, regular_blocks);
+        }
         
         CUDA_CHECK(cudaEventRecord(stop));
         CUDA_CHECK(cudaEventSynchronize(stop));
@@ -386,8 +437,10 @@ double benchmark_configuration(int threads, int threshold,
     // Cleanup
     if (d_short_rows) CUDA_CHECK(cudaFree(d_short_rows));
     if (d_long_rows) CUDA_CHECK(cudaFree(d_long_rows));
+    if (d_very_long_rows) CUDA_CHECK(cudaFree(d_very_long_rows));
     free(short_rows);
     free(long_rows);
+    free(very_long_rows);
     
     double avg_time = total_time / benchmark_iterations;
     // Return performance score (higher is better - we use 1/time for maximization)
@@ -398,9 +451,9 @@ double benchmark_configuration(int threads, int threshold,
 void tune_launch_parameters(int n, int nnz, const int *row_ptr,
                            const double *csr_vals, const int *csr_cols,
                            const double *v, double *C, int rows, int cols, int values,
-                           int &best_threads, int &best_threshold) {
+                           int &best_threads, int &best_threshold, int &best_very_long_threshold) {
     
-    printf("Starting adaptive parameter tuning...\n");
+    // printf("Starting adaptive parameter tuning...\n");
     
     // Parameter search spaces
     int thread_options[] = {64, 128, 256, 512};
@@ -409,49 +462,63 @@ void tune_launch_parameters(int n, int nnz, const int *row_ptr,
     // Initialize with matrix analysis for starting point
     struct MAT_STATS stats = calculate_matrix_stats_gpu(row_ptr, n);
     
-    printf("Matrix analysis:\n");
-    printf("  Mean NNZ per row: %.2f\n", stats.mean_nnz_per_row);
-    printf("  Std deviation: %.2f\n", stats.std_dev_nnz_per_row);
-    printf("  Max NNZ per row: %d\n", stats.max_nnz_per_row);
+    // printf("Matrix analysis:\n");
+    // printf("  Mean NNZ per row: %.2f\n", stats.mean_nnz_per_row);
+    // printf("  Std deviation: %.2f\n", stats.std_dev_nnz_per_row);
+    // printf("  Max NNZ per row: %d\n", stats.max_nnz_per_row);
     
     // Determine threshold search range based on matrix characteristics
     int min_threshold = 4;
     int max_threshold = std::min(256, (int)(stats.mean_nnz_per_row * 4));
     if (max_threshold < min_threshold) max_threshold = min_threshold * 4;
     
-    printf("Threshold search range: [%d, %d]\n", min_threshold, max_threshold);
+    // Very long threshold options
+    int very_long_options[] = {256, 512, 1024, 2048};
+    int num_very_long_options = sizeof(very_long_options) / sizeof(very_long_options[0]);
+    
+    // printf("Threshold search range: [%d, %d]\n", min_threshold, max_threshold);
+    // printf("Very long threshold options: 256, 512, 1024, 2048\n");
     
     double best_score = 0.0;
     best_threads = 256;  // Default fallback
     best_threshold = 32;
+    best_very_long_threshold = 1024;
     
     // Phase 1: Coarse grid search
-    printf("\nPhase 1: Coarse grid search\n");
+    // printf("\nPhase 1: Coarse grid search\n");
     for (int t = 0; t < num_thread_options; t++) {
         int threads = thread_options[t];
         
         // Test multiple threshold values
         for (int threshold = min_threshold; threshold <= max_threshold; threshold *= 2) {
-            printf("Testing: threads=%d, threshold=%d... ", threads, threshold);
-            
-            double score = benchmark_configuration(threads, threshold, csr_vals, row_ptr, csr_cols, v, C, rows, cols, values);
-            
-            printf("score=%.2f\n", score);
-            
-            if (score > best_score) {
-                best_score = score;
-                best_threads = threads;
-                best_threshold = threshold;
-                printf("  -> New best configuration!\n");
+            // Test different very long thresholds
+            for (int vl = 0; vl < num_very_long_options; vl++) {
+                int very_long_threshold = very_long_options[vl];
+                if (very_long_threshold <= threshold) continue; // Must be larger than regular threshold
+                
+                // printf("Testing: threads=%d, threshold=%d, very_long=%d... ", threads, threshold, very_long_threshold);
+                
+                double score = benchmark_configuration(threads, threshold, very_long_threshold, 
+                                                     csr_vals, row_ptr, csr_cols, v, C, rows, cols, values);
+                
+                // printf("score=%.2f\n", score);
+                
+                if (score > best_score) {
+                    best_score = score;
+                    best_threads = threads;
+                    best_threshold = threshold;
+                    best_very_long_threshold = very_long_threshold;
+                    // printf("  -> New best configuration!\n");
+                }
             }
         }
     }
     
-    printf("\nBest from coarse search: threads=%d, threshold=%d, score=%.2f\n", 
-           best_threads, best_threshold, best_score);
+    // printf("\nBest from coarse search: threads=%d, threshold=%d, very_long=%d, score=%.2f\n", 
+    //        best_threads, best_threshold, best_very_long_threshold, best_score);
     
     // Phase 2: Fine-tuning around best configuration
-    printf("\nPhase 2: Fine-tuning around best configuration\n");
+    // printf("\nPhase 2: Fine-tuning around best configuration\n");
     
     // Fine-tune threshold around best value
     int threshold_start = std::max(min_threshold, best_threshold / 2);
@@ -461,56 +528,80 @@ void tune_launch_parameters(int n, int nnz, const int *row_ptr,
     for (int threshold = threshold_start; threshold <= threshold_end; threshold += threshold_step) {
         if (threshold == best_threshold) continue; // Already tested
         
-        printf("Fine-tuning: threads=%d, threshold=%d... ", best_threads, threshold);
+        // printf("Fine-tuning: threads=%d, threshold=%d, very_long=%d... ", 
+        //        best_threads, threshold, best_very_long_threshold);
         
-        double score = benchmark_configuration(best_threads, threshold, csr_vals, row_ptr, csr_cols, v, C, rows, cols, values);
+        double score = benchmark_configuration(best_threads, threshold, best_very_long_threshold, 
+                                             csr_vals, row_ptr, csr_cols, v, C, rows, cols, values);
         
-        printf("score=%.2f\n", score);
+        // printf("score=%.2f\n", score);
         
         if (score > best_score) {
             best_score = score;
             best_threshold = threshold;
-            printf("  -> Improved configuration!\n");
+            // printf("  -> Improved configuration!\n");
         }
     }
     
-    printf("\nOptimal configuration found:\n");
-    printf("  Threads per block: %d\n", best_threads);
-    printf("  Threshold: %d\n", best_threshold);
-    printf("  Performance score: %.2f\n", best_score);
+    // printf("\nOptimal configuration found:\n");
+    // printf("  Threads per block: %d\n", best_threads);
+    // printf("  Threshold: %d\n", best_threshold);
+    // printf("  Very long threshold: %d\n", best_very_long_threshold);
+    // printf("  Performance score: %.2f\n", best_score);
 }
 
 void get_hybrid_launch_config(int n, int nnz, const int *row_ptr, 
                              int &blocks, int &threads, 
-                             int **short_rows, int **long_rows, 
-                             int *num_short, int *num_long, int *short_blocks_limit,
+                             int **short_rows, int **long_rows, int **very_long_rows,
+                             int *num_short, int *num_long, int *num_very_long, 
+                             int *short_blocks_limit, int *long_blocks_limit,
                              const double *csr_vals, const int *csr_cols,
                              const double *v, double *C, int rows, int cols, int values) {
     
-    int optimal_threads, optimal_threshold;
+    int optimal_threads, optimal_threshold, optimal_very_long_threshold;
     
+    double time;
+    TIMER_DEF(var);
+    TIMER_START(var);                           
+
     // Run parameter tuning
     tune_launch_parameters(n, nnz, row_ptr, csr_vals, csr_cols, v, C, rows, cols, values,
-                          optimal_threads, optimal_threshold);
+                          optimal_threads, optimal_threshold, optimal_very_long_threshold);
     
     // Apply optimal configuration
     threads = optimal_threads;
+
+    TIMER_STOP(var);
+    time = TIMER_ELAPSED(var) / 1000.0; // Convert to ms
+    printf("Tuning time: %.3f ms\n", time);
+
+    TIMER_DEF(var2);
+    TIMER_START(var2);
     
-    classify_rows(row_ptr, n, short_rows, long_rows, num_short, num_long, optimal_threshold);
+    classify_rows(row_ptr, n, short_rows, long_rows, very_long_rows, 
+                  num_short, num_long, num_very_long, optimal_threshold, optimal_very_long_threshold);
     
-    printf("\nFinal configuration: THREADS=%d THRESHOLD=%d\n", threads, optimal_threshold);
-    printf("Row classification (threshold=%d):\n", optimal_threshold);
-    printf("  Short rows: %d (%.1f%%)\n", *num_short, 100.0 * (*num_short) / n);
-    printf("  Long rows: %d (%.1f%%)\n", *num_long, 100.0 * (*num_long) / n);
+    TIMER_STOP(var2);
+    time = TIMER_ELAPSED(var2) / 1000.0; // Convert to ms
+    printf("Preprocessing time: %.3f ms\n", time);
+
+    // printf("\nFinal configuration: THREADS=%d THRESHOLD=%d VERY_LONG_THRESHOLD=%d\n", 
+    //        threads, optimal_threshold, optimal_very_long_threshold);
+    // printf("Row classification (threshold=%d, very_long_threshold=%d):\n", 
+    //        optimal_threshold, optimal_very_long_threshold);
+    // printf("  Short rows: %d (%.1f%%)\n", *num_short, 100.0 * (*num_short) / n);
+    // printf("  Long rows: %d (%.1f%%)\n", *num_long, 100.0 * (*num_long) / n);
+    // printf("  Very long rows: %d (%.1f%%)\n", *num_very_long, 100.0 * (*num_very_long) / n);
     
     // Calculate launch configuration
     *short_blocks_limit = (*num_short + threads - 1) / threads;
-    int long_blocks = (*num_long + (threads / WARP_SIZE) - 1) / (threads / WARP_SIZE);
+    *long_blocks_limit = (*num_long + (threads / WARP_SIZE) - 1) / (threads / WARP_SIZE);
+    int very_long_blocks = *num_very_long; // 1 block per very long row
     
-    blocks = *short_blocks_limit + long_blocks;
+    blocks = *short_blocks_limit + *long_blocks_limit + very_long_blocks;
     
-    printf("Launch config: %d blocks (%d short + %d long), %d threads\n", 
-           blocks, *short_blocks_limit, long_blocks, threads);
+    // printf("Launch config: %d blocks (%d short + %d long + %d very long), %d threads\n", 
+    //        blocks, *short_blocks_limit, *long_blocks_limit, very_long_blocks, threads);
 }
 
 // ============== HYBRID KERNEL ==============
@@ -519,14 +610,16 @@ void get_hybrid_launch_config(int n, int nnz, const int *row_ptr,
 __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
-                                              const int *long_rows, int num_short, 
-                                              int num_long, int short_blocks) {
+                                              const int *long_rows, const int *very_long_rows,
+                                              int num_short, int num_long, int num_very_long,
+                                              int short_blocks, int long_blocks, int block_offset) {
     
-    const int global_thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    const int global_thread_id = (blockIdx.x + block_offset) * blockDim.x + threadIdx.x;
     const int warp_lane = global_thread_id & (WARP_SIZE - 1);
+    const int effective_block_id = blockIdx.x + block_offset;
     
     // Strategy A: Thread-level processing for sparse rows
-    if (blockIdx.x < short_blocks) {
+    if (effective_block_id < short_blocks) {
         const int sparse_row_index = global_thread_id;
         if (sparse_row_index >= num_short) return;
         
@@ -561,10 +654,10 @@ __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const i
         res[target_row] = accumulator;
     }
     // Strategy B: Warp-cooperative processing for dense rows
-    else {
+    else if (effective_block_id < short_blocks + long_blocks) {
         const int warps_per_block = blockDim.x / WARP_SIZE;
         const int block_warp_id = threadIdx.x / WARP_SIZE;
-        const int global_warp_id = (blockIdx.x - short_blocks) * warps_per_block + block_warp_id;
+        const int global_warp_id = (effective_block_id - short_blocks) * warps_per_block + block_warp_id;
         
         if (global_warp_id >= num_long) return;
         
@@ -587,6 +680,37 @@ __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const i
         // First thread in warp writes final result
         if (warp_lane == 0) {
             res[dense_row] = partial_result;
+        }
+    }
+    // Strategy C: Block-level processing for very long rows (optimized block-wide reduction)
+    else {
+        int very_long_row_idx = effective_block_id - short_blocks - long_blocks;
+        if (very_long_row_idx >= num_very_long) return;
+        
+        int row = very_long_rows[very_long_row_idx];
+        int row_start = csr_row_ptr[row];
+        int row_end = csr_row_ptr[row + 1];
+        
+        double sum = 0.0;
+        for (int idx = row_start + threadIdx.x; idx < row_end; idx += blockDim.x) {
+            sum += csr_values[idx] * __ldg(&vec[csr_col_indices[idx]]);
+        }
+        
+        // Block-wide reduction using shared memory
+        extern __shared__ double sdata[];
+        sdata[threadIdx.x] = sum;
+        __syncthreads();
+        
+        // Reduce in shared memory
+        for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (threadIdx.x < s) {
+                sdata[threadIdx.x] += sdata[threadIdx.x + s];
+            }
+            __syncthreads();
+        }
+        
+        if (threadIdx.x == 0) {
+            res[row] = sdata[0];
         }
     }
 }
@@ -784,24 +908,18 @@ int main(int argc, char *argv[]) {
     }
     
     // Get adaptive launch configuration
-    double time;
-    TIMER_DEF(var);
-    TIMER_START(var);
-    
     int blocks, threads;
-    int *short_rows, *long_rows;
-    int num_short, num_long, short_blocks_limit;
+    int *short_rows, *long_rows, *very_long_rows;
+    int num_short, num_long, num_very_long, short_blocks_limit, long_blocks_limit;
     
     get_hybrid_launch_config(rows, values, row_ptr, blocks, threads,
-                            &short_rows, &long_rows, &num_short, &num_long, &short_blocks_limit,
+                            &short_rows, &long_rows, &very_long_rows, 
+                            &num_short, &num_long, &num_very_long, 
+                            &short_blocks_limit, &long_blocks_limit,
                             csr_vals, csr_cols, v, C, rows, cols, values);
     
-    TIMER_STOP(var);
-    time = TIMER_ELAPSED(var) / 1000.0; // Convert to ms
-    printf("Preprocessing time: %.3f ms\n", time);
-    
     // Transfer row arrays to GPU
-    int *d_short_rows = nullptr, *d_long_rows = nullptr;
+    int *d_short_rows = nullptr, *d_long_rows = nullptr, *d_very_long_rows = nullptr;
     if (num_short > 0) {
         CUDA_CHECK(cudaMalloc(&d_short_rows, num_short * sizeof(int)));
         CUDA_CHECK(cudaMemcpy(d_short_rows, short_rows, num_short * sizeof(int), cudaMemcpyHostToDevice));
@@ -810,10 +928,20 @@ int main(int argc, char *argv[]) {
         CUDA_CHECK(cudaMalloc(&d_long_rows, num_long * sizeof(int)));
         CUDA_CHECK(cudaMemcpy(d_long_rows, long_rows, num_long * sizeof(int), cudaMemcpyHostToDevice));
     }
+    if (num_very_long > 0) {
+        CUDA_CHECK(cudaMalloc(&d_very_long_rows, num_very_long * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(d_very_long_rows, very_long_rows, num_very_long * sizeof(int), cudaMemcpyHostToDevice));
+    }
     
     // Warmup and timing
     cudaEvent_t start, stop;
     double totalTime = 0.0;
+    
+    // Parameters for very long rows
+    int very_long_block_size = 1024;
+    size_t very_long_shared_mem = very_long_block_size * sizeof(double);
+    int very_long_blocks = num_very_long;
+    int regular_blocks = short_blocks_limit + long_blocks_limit;
     
     for (int i = 0; i < ITERATIONS; i++) {
         CUDA_CHECK(cudaMemset(C, 0, rows * sizeof(double)));
@@ -822,11 +950,23 @@ int main(int argc, char *argv[]) {
         CUDA_CHECK(cudaEventCreate(&stop));
         CUDA_CHECK(cudaEventRecord(start));
         
-        // Launch hybrid kernel
-        hybrid_adaptive_spmv_optimized<<<blocks, threads>>>(
-            csr_vals, row_ptr, csr_cols, v, C, rows, 
-            d_short_rows, d_long_rows, num_short, num_long, short_blocks_limit);
-        checkCudaError("hybrid_adaptive_spmv_optimized");
+        // Launch short and long rows together
+        if (regular_blocks > 0) {
+            hybrid_adaptive_spmv_optimized<<<regular_blocks, threads>>>(
+                csr_vals, row_ptr, csr_cols, v, C, rows, 
+                d_short_rows, d_long_rows, d_very_long_rows,
+                num_short, num_long, num_very_long, short_blocks_limit, long_blocks_limit, 0);
+            checkCudaError("hybrid_adaptive_spmv_optimized (short/long)");
+        }
+        
+        // Launch very long rows separately with optimal block size and correct offset
+        if (very_long_blocks > 0) {
+            hybrid_adaptive_spmv_optimized<<<very_long_blocks, very_long_block_size, very_long_shared_mem>>>(
+                csr_vals, row_ptr, csr_cols, v, C, rows, 
+                d_short_rows, d_long_rows, d_very_long_rows,
+                num_short, num_long, num_very_long, short_blocks_limit, long_blocks_limit, regular_blocks);
+            checkCudaError("hybrid_adaptive_spmv_optimized (very long)");
+        }
         
         CUDA_CHECK(cudaEventRecord(stop));
         CUDA_CHECK(cudaEventSynchronize(stop));
@@ -845,6 +985,19 @@ int main(int argc, char *argv[]) {
     double avg_time = totalTime / (ITERATIONS - 1);
     compute_performance_metrics(rows, cols, values, avg_time);
     
+    // Quick verification - check a few result values to ensure computation was correct
+    // printf("\nQuick verification (first 5 non-zero results):\n");
+    // int printed = 0;
+    // for (int i = 0; i < rows && printed < 5; i++) {
+    //     if (C[i] != 0.0) {
+    //         printf("  C[%d] = %.6f\n", i, C[i]);
+    //         printed++;
+    //     }
+    // }
+    // if (printed == 0) {
+    //     printf("  WARNING: All results are zero - possible computation error!\n");
+    // }
+    
     // Print result vector
     // printf("\nResult vector (one value per line):\n");
     // print_result_vector(C, rows);
@@ -858,6 +1011,14 @@ int main(int argc, char *argv[]) {
     CUDA_CHECK(cudaFree(csr_vals));
     CUDA_CHECK(cudaFree(v));
     CUDA_CHECK(cudaFree(C));
+    
+    if (d_short_rows) CUDA_CHECK(cudaFree(d_short_rows));
+    if (d_long_rows) CUDA_CHECK(cudaFree(d_long_rows));
+    if (d_very_long_rows) CUDA_CHECK(cudaFree(d_very_long_rows));
+    
+    free(short_rows);
+    free(long_rows);
+    free(very_long_rows);
     
     return 0;
 }
