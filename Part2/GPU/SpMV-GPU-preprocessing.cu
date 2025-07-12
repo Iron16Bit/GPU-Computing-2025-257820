@@ -11,7 +11,6 @@
 // ============== CONFIGURABLE PARAMETERS ==============
 #define DEFAULT_THREADS_PER_BLOCK 256
 #define WARP_SIZE 32
-#define MAX_SHARED_MEM_PER_BLOCK 48000  // 48KB shared memory
 #define ITERATIONS 51
 
 // CUDA error checking macro
@@ -210,39 +209,45 @@ struct MAT_STATS calculate_matrix_stats_gpu(const int *row_ptr, int num_rows) {
 
 // ============== ROW CLASSIFICATION ==============
 
-void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows, 
-                   int *num_short, int *num_long, int threshold) {
+void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows, int **very_long_rows,
+                   int *num_short, int *num_long, int *num_very_long, int threshold, int very_long_threshold) {
     
-    // First pass: count short and long rows
+    // First pass: count short, long, and very long rows
     *num_short = 0;
     *num_long = 0;
+    *num_very_long = 0;
     
     for (int i = 0; i < n; i++) {
         int row_length = row_ptr[i + 1] - row_ptr[i];
         if (row_length <= threshold) {
             (*num_short)++;
-        } else {
+        } else if (row_length <= very_long_threshold) {
             (*num_long)++;
+        } else {
+            (*num_very_long)++;
         }
     }
     
     // Allocate arrays
     *short_rows = (int*)malloc(*num_short * sizeof(int));
     *long_rows = (int*)malloc(*num_long * sizeof(int));
+    *very_long_rows = (int*)malloc(*num_very_long * sizeof(int));
     
-    if (!*short_rows || !*long_rows) {
+    if (!*short_rows || !*long_rows || !*very_long_rows) {
         printf("Error: Failed to allocate memory for row classification\n");
         return;
     }
     
     // Second pass: populate arrays
-    int short_idx = 0, long_idx = 0;
+    int short_idx = 0, long_idx = 0, very_long_idx = 0;
     for (int i = 0; i < n; i++) {
         int row_length = row_ptr[i + 1] - row_ptr[i];
         if (row_length <= threshold) {
             (*short_rows)[short_idx++] = i;
-        } else {
+        } else if (row_length <= very_long_threshold) {
             (*long_rows)[long_idx++] = i;
+        } else {
+            (*very_long_rows)[very_long_idx++] = i;
         }
     }
 }
@@ -250,9 +255,9 @@ void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows,
 // ============== GPU ROW CLASSIFICATION ==============
 
 // GPU kernel for row classification
-__global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold,
-                                   int *short_rows, int *long_rows,
-                                   int *short_count, int *long_count) {
+__global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                   int *short_rows, int *long_rows, int *very_long_rows,
+                                   int *short_count, int *long_count, int *very_long_count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < n) {
@@ -261,31 +266,38 @@ __global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold,
         if (row_length <= threshold) {
             int pos = atomicAdd(short_count, 1);
             short_rows[pos] = idx;
-        } else {
+        } else if (row_length <= very_long_threshold) {
             int pos = atomicAdd(long_count, 1);
             long_rows[pos] = idx;
+        } else {
+            int pos = atomicAdd(very_long_count, 1);
+            very_long_rows[pos] = idx;
         }
     }
 }
 
 // GPU kernel for counting rows by type (first pass)
-__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold,
-                                 int *short_count, int *long_count) {
+__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                 int *short_count, int *long_count, int *very_long_count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     __shared__ int s_short[256];
     __shared__ int s_long[256];
+    __shared__ int s_very_long[256];
     
     int tid = threadIdx.x;
     s_short[tid] = 0;
     s_long[tid] = 0;
+    s_very_long[tid] = 0;
     
     if (idx < n) {
         int row_length = row_ptr[idx + 1] - row_ptr[idx];
         if (row_length <= threshold) {
             s_short[tid] = 1;
-        } else {
+        } else if (row_length <= very_long_threshold) {
             s_long[tid] = 1;
+        } else {
+            s_very_long[tid] = 1;
         }
     }
     __syncthreads();
@@ -295,6 +307,7 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold,
         if (tid < stride) {
             s_short[tid] += s_short[tid + stride];
             s_long[tid] += s_long[tid + stride];
+            s_very_long[tid] += s_very_long[tid + stride];
         }
         __syncthreads();
     }
@@ -302,35 +315,41 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold,
     if (tid == 0) {
         atomicAdd(short_count, s_short[0]);
         atomicAdd(long_count, s_long[0]);
+        atomicAdd(very_long_count, s_very_long[0]);
     }
 }
 
-void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_rows, 
-                      int *num_short, int *num_long, int threshold) {
+void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_rows, int **very_long_rows,
+                      int *num_short, int *num_long, int *num_very_long, int threshold, int very_long_threshold) {
     
     // GPU memory for counters
-    int *d_short_count, *d_long_count;
+    int *d_short_count, *d_long_count, *d_very_long_count;
     CUDA_CHECK(cudaMalloc(&d_short_count, sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_long_count, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_very_long_count, sizeof(int)));
     
     // Initialize counters
     int zero = 0;
     CUDA_CHECK(cudaMemcpy(d_short_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_very_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     
     // First pass: count rows
     int threads = 256;
     int blocks = (n + threads - 1) / threads;
-    count_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, d_short_count, d_long_count);
+    count_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold, 
+                                          d_short_count, d_long_count, d_very_long_count);
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Get counts
     CUDA_CHECK(cudaMemcpy(num_short, d_short_count, sizeof(int), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(num_long, d_long_count, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(num_very_long, d_very_long_count, sizeof(int), cudaMemcpyDeviceToHost));
     
     // Allocate arrays on host
     *short_rows = (int*)malloc(*num_short * sizeof(int));
     *long_rows = (int*)malloc(*num_long * sizeof(int));
+    *very_long_rows = (int*)malloc(*num_very_long * sizeof(int));
     
     if (*num_short > 0 && !*short_rows) {
         printf("Error: Failed to allocate memory for short rows\n");
@@ -340,25 +359,34 @@ void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_r
         printf("Error: Failed to allocate memory for long rows\n");
         return;
     }
+    if (*num_very_long > 0 && !*very_long_rows) {
+        printf("Error: Failed to allocate memory for very long rows\n");
+        return;
+    }
     
     // GPU arrays for classification
-    int *d_short_rows, *d_long_rows;
+    int *d_short_rows, *d_long_rows, *d_very_long_rows;
     if (*num_short > 0) {
         CUDA_CHECK(cudaMalloc(&d_short_rows, *num_short * sizeof(int)));
     }
     if (*num_long > 0) {
         CUDA_CHECK(cudaMalloc(&d_long_rows, *num_long * sizeof(int)));
     }
+    if (*num_very_long > 0) {
+        CUDA_CHECK(cudaMalloc(&d_very_long_rows, *num_very_long * sizeof(int)));
+    }
     
     // Reset counters for second pass
     CUDA_CHECK(cudaMemcpy(d_short_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_very_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     
     // Second pass: populate arrays
-    classify_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold,
+    classify_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold,
                                              (*num_short > 0) ? d_short_rows : nullptr,
                                              (*num_long > 0) ? d_long_rows : nullptr,
-                                             d_short_count, d_long_count);
+                                             (*num_very_long > 0) ? d_very_long_rows : nullptr,
+                                             d_short_count, d_long_count, d_very_long_count);
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Copy results back to host
@@ -370,10 +398,38 @@ void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_r
         CUDA_CHECK(cudaMemcpy(*long_rows, d_long_rows, *num_long * sizeof(int), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaFree(d_long_rows));
     }
+    if (*num_very_long > 0) {
+        CUDA_CHECK(cudaMemcpy(*very_long_rows, d_very_long_rows, *num_very_long * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_very_long_rows));
+    }
     
     // Cleanup
     CUDA_CHECK(cudaFree(d_short_count));
     CUDA_CHECK(cudaFree(d_long_count));
+    CUDA_CHECK(cudaFree(d_very_long_count));
+}
+
+// ============== ADAPTIVE THRESHOLD SELECTION ==============
+
+void get_adaptive_thresholds(const struct MAT_STATS *stats, int *threshold, int *very_long_threshold) {
+    if (stats->mean_nnz_per_row < 3.0) {
+        *threshold = 16;
+        *very_long_threshold = 256; // For mawi, treat rows > 256 as 'very long'
+    } else if (stats->mean_nnz_per_row < 8.0) {
+        *threshold = 16;
+        *very_long_threshold = 256;
+    } else if (stats->mean_nnz_per_row < 35.0) {
+        if (stats->std_dev_nnz_per_row > 50.0) {
+            *threshold = 32;
+            *very_long_threshold = 512;
+        } else {
+            *threshold = 64;
+            *very_long_threshold = 512;
+        }
+    } else {
+        *threshold = 128;
+        *very_long_threshold = 1024;
+    }
 }
 
 // ============== KERNEL FORWARD DECLARATION ==============
@@ -381,8 +437,9 @@ void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_r
 __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
-                                              const int *long_rows, int num_short, 
-                                              int num_long, int short_blocks);
+                                              const int *long_rows, const int *very_long_rows,
+                                              int num_short, int num_long, int num_very_long,
+                                              int short_blocks);
 
 struct PreprocessingTimes {
     double cpu_time;
@@ -391,23 +448,30 @@ struct PreprocessingTimes {
 
 struct PreprocessingTimes preprocessing_benchmark(int n, int nnz, const int *row_ptr) {
     
-    int optimal_threshold = 32; // Default value
-    int *short_rows_cpu, *long_rows_cpu, *short_rows_gpu, *long_rows_gpu;
-    int num_short_cpu, num_long_cpu, num_short_gpu, num_long_gpu;
+    int optimal_threshold, very_long_threshold; // Adaptive thresholds
+    int *short_rows_cpu, *long_rows_cpu, *very_long_rows_cpu;
+    int *short_rows_gpu, *long_rows_gpu, *very_long_rows_gpu;
+    int num_short_cpu, num_long_cpu, num_very_long_cpu;
+    int num_short_gpu, num_long_gpu, num_very_long_gpu;
     
-    // Benchmark CPU preprocessing
-    TIMER_DEF(cpu_timer);
-    TIMER_START(cpu_timer);
-    
-    // CPU matrix statistics
+    // Calculate matrix statistics for adaptive threshold selection
     struct CSR temp_csr;
     temp_csr.row_pointers = (int*)row_ptr;
     temp_csr.num_rows = n;
     temp_csr.num_non_zeros = nnz;
     struct MAT_STATS stats_cpu = calculate_matrix_stats(&temp_csr);
     
+    // Get adaptive thresholds based on matrix characteristics
+    get_adaptive_thresholds(&stats_cpu, &optimal_threshold, &very_long_threshold);
+    
+    // Benchmark CPU preprocessing
+    TIMER_DEF(cpu_timer);
+    TIMER_START(cpu_timer);
+    
     // CPU row classification
-    classify_rows(row_ptr, n, &short_rows_cpu, &long_rows_cpu, &num_short_cpu, &num_long_cpu, optimal_threshold);
+    classify_rows(row_ptr, n, &short_rows_cpu, &long_rows_cpu, &very_long_rows_cpu, 
+                  &num_short_cpu, &num_long_cpu, &num_very_long_cpu, 
+                  optimal_threshold, very_long_threshold);
     
     TIMER_STOP(cpu_timer);
     double cpu_time = TIMER_ELAPSED(cpu_timer) / 1000.0; // Convert to ms
@@ -421,7 +485,9 @@ struct PreprocessingTimes preprocessing_benchmark(int n, int nnz, const int *row
     struct MAT_STATS stats_gpu = calculate_matrix_stats_gpu(row_ptr, n);
     
     // GPU row classification
-    classify_rows_gpu(row_ptr, n, &short_rows_gpu, &long_rows_gpu, &num_short_gpu, &num_long_gpu, optimal_threshold);
+    classify_rows_gpu(row_ptr, n, &short_rows_gpu, &long_rows_gpu, &very_long_rows_gpu, 
+                     &num_short_gpu, &num_long_gpu, &num_very_long_gpu, 
+                     optimal_threshold, very_long_threshold);
     
     TIMER_STOP(gpu_timer);
     double gpu_time = TIMER_ELAPSED(gpu_timer) / 1000.0; // Convert to ms
@@ -430,8 +496,10 @@ struct PreprocessingTimes preprocessing_benchmark(int n, int nnz, const int *row
     // Cleanup
     if (short_rows_cpu) free(short_rows_cpu);
     if (long_rows_cpu) free(long_rows_cpu);
+    if (very_long_rows_cpu) free(very_long_rows_cpu);
     if (short_rows_gpu) free(short_rows_gpu);
     if (long_rows_gpu) free(long_rows_gpu);
+    if (very_long_rows_gpu) free(very_long_rows_gpu);
     
     struct PreprocessingTimes times;
     times.cpu_time = cpu_time;
@@ -445,8 +513,9 @@ struct PreprocessingTimes preprocessing_benchmark(int n, int nnz, const int *row
 __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
-                                              const int *long_rows, int num_short, 
-                                              int num_long, int short_blocks) {
+                                              const int *long_rows, const int *very_long_rows,
+                                              int num_short, int num_long, int num_very_long,
+                                              int short_blocks) {
     
     const int global_thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int warp_lane = global_thread_id & (WARP_SIZE - 1);
@@ -515,6 +584,9 @@ __global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const i
             res[dense_row] = partial_result;
         }
     }
+    
+    // Note: Very long rows (num_very_long) would typically be handled by a third strategy
+    // such as block-level cooperative processing, but this is a dummy kernel for benchmarking
 }
 
 // ============== MATRIX I/O AND CONVERSION ==============

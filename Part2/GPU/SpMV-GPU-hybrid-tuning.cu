@@ -453,19 +453,12 @@ void tune_launch_parameters(int n, int nnz, const int *row_ptr,
                            const double *v, double *C, int rows, int cols, int values,
                            int &best_threads, int &best_threshold, int &best_very_long_threshold) {
     
-    // printf("Starting adaptive parameter tuning...\n");
-    
     // Parameter search spaces
     int thread_options[] = {64, 128, 256, 512};
     int num_thread_options = sizeof(thread_options) / sizeof(thread_options[0]);
     
     // Initialize with matrix analysis for starting point
     struct MAT_STATS stats = calculate_matrix_stats_gpu(row_ptr, n);
-    
-    // printf("Matrix analysis:\n");
-    // printf("  Mean NNZ per row: %.2f\n", stats.mean_nnz_per_row);
-    // printf("  Std deviation: %.2f\n", stats.std_dev_nnz_per_row);
-    // printf("  Max NNZ per row: %d\n", stats.max_nnz_per_row);
     
     // Determine threshold search range based on matrix characteristics
     int min_threshold = 4;
@@ -476,16 +469,12 @@ void tune_launch_parameters(int n, int nnz, const int *row_ptr,
     int very_long_options[] = {256, 512, 1024, 2048};
     int num_very_long_options = sizeof(very_long_options) / sizeof(very_long_options[0]);
     
-    // printf("Threshold search range: [%d, %d]\n", min_threshold, max_threshold);
-    // printf("Very long threshold options: 256, 512, 1024, 2048\n");
-    
     double best_score = 0.0;
     best_threads = 256;  // Default fallback
     best_threshold = 32;
     best_very_long_threshold = 1024;
     
     // Phase 1: Coarse grid search
-    // printf("\nPhase 1: Coarse grid search\n");
     for (int t = 0; t < num_thread_options; t++) {
         int threads = thread_options[t];
         
@@ -496,29 +485,20 @@ void tune_launch_parameters(int n, int nnz, const int *row_ptr,
                 int very_long_threshold = very_long_options[vl];
                 if (very_long_threshold <= threshold) continue; // Must be larger than regular threshold
                 
-                // printf("Testing: threads=%d, threshold=%d, very_long=%d... ", threads, threshold, very_long_threshold);
-                
                 double score = benchmark_configuration(threads, threshold, very_long_threshold, 
                                                      csr_vals, row_ptr, csr_cols, v, C, rows, cols, values);
-                
-                // printf("score=%.2f\n", score);
                 
                 if (score > best_score) {
                     best_score = score;
                     best_threads = threads;
                     best_threshold = threshold;
                     best_very_long_threshold = very_long_threshold;
-                    // printf("  -> New best configuration!\n");
                 }
             }
         }
     }
     
-    // printf("\nBest from coarse search: threads=%d, threshold=%d, very_long=%d, score=%.2f\n", 
-    //        best_threads, best_threshold, best_very_long_threshold, best_score);
-    
     // Phase 2: Fine-tuning around best configuration
-    // printf("\nPhase 2: Fine-tuning around best configuration\n");
     
     // Fine-tune threshold around best value
     int threshold_start = std::max(min_threshold, best_threshold / 2);
@@ -528,26 +508,14 @@ void tune_launch_parameters(int n, int nnz, const int *row_ptr,
     for (int threshold = threshold_start; threshold <= threshold_end; threshold += threshold_step) {
         if (threshold == best_threshold) continue; // Already tested
         
-        // printf("Fine-tuning: threads=%d, threshold=%d, very_long=%d... ", 
-        //        best_threads, threshold, best_very_long_threshold);
-        
         double score = benchmark_configuration(best_threads, threshold, best_very_long_threshold, 
                                              csr_vals, row_ptr, csr_cols, v, C, rows, cols, values);
-        
-        // printf("score=%.2f\n", score);
         
         if (score > best_score) {
             best_score = score;
             best_threshold = threshold;
-            // printf("  -> Improved configuration!\n");
         }
     }
-    
-    // printf("\nOptimal configuration found:\n");
-    // printf("  Threads per block: %d\n", best_threads);
-    // printf("  Threshold: %d\n", best_threshold);
-    // printf("  Very long threshold: %d\n", best_very_long_threshold);
-    // printf("  Performance score: %.2f\n", best_score);
 }
 
 void get_hybrid_launch_config(int n, int nnz, const int *row_ptr, 
