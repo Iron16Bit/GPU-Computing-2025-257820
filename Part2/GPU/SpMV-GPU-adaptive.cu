@@ -200,30 +200,25 @@ void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
     // {name, short_threshold, long_threshold, threads_per_block, description}
     CONFIG_OPTION configs[] = {
         {"Short-Dense", 16, 64, 1024, "Optimized for short dense rows"}, // More rows as short for uniform small matrices
-        {"Medium-Balanced", 32, 128, 1024, "Balanced for medium row lengths"}, // Good balance for most matrices
-        {"High-Variance", 16, 96, 1024, "Optimized for high variance matrices"}, // Conservative short threshold to handle irregularity
-        {"Very-Dense", 64, 256, 1024, "Optimized for very dense matrices"} // High thresholds to avoid atomic overhead
+        {"Balanced", 32, 128, 1024, "Balanced for medium row lengths"}, // Good balance for most matrices
+        {"Dense", 64, 256, 1024, "Optimized for very dense matrices"} // High thresholds to avoid atomic overhead
     };
     
-    int selected_config = 1; // Default to Medium-Balanced
+    int selected_config = 1; // Default to Balanced
     
     printf("Auto-Selection Logic:\n");
     
     // Improved selection logic based on matrix characteristics
-    if (stats.mean_nnz_per_row < 15.0) {
+    if (stats.mean_nnz_per_row < 15.0 || (stats.mean_nnz_per_row < 35.0 && stats.max_nnz_per_row < 100)) {
         selected_config = 0; // Short-Dense
         printf("  Matrix has short rows (mean=%.2f) -> Selecting Short-Dense\n", stats.mean_nnz_per_row);
     } else if (stats.mean_nnz_per_row > 100.0) {
-        selected_config = 3; // Very-Dense
-        printf("  Matrix is very dense (mean=%.2f) -> Selecting Very-Dense\n", stats.mean_nnz_per_row);
-    } else if (stats.std_dev_nnz_per_row > stats.mean_nnz_per_row * 1.0) {
-        selected_config = 2; // High-Variance
-        printf("  Matrix has high variance (std=%.2f, mean=%.2f) -> Selecting High-Variance\n", 
-               stats.std_dev_nnz_per_row, stats.mean_nnz_per_row);
+        selected_config = 3; // Dense
+        printf("  Matrix is very dense (mean=%.2f) -> Selecting Dense\n", stats.mean_nnz_per_row);
     } else {
-        selected_config = 1; // Medium-Balanced
-        printf("  Matrix has medium density (mean=%.2f, std=%.2f) -> Selecting Medium-Balanced\n", 
-               stats.mean_nnz_per_row, stats.std_dev_nnz_per_row);
+        selected_config = 1; // Balanced
+        printf("  Matrix has medium density (mean=%.2f, std=%.2f) -> Selecting Balanced\n", 
+                stats.mean_nnz_per_row, stats.std_dev_nnz_per_row);
     }
     
     CONFIG_OPTION chosen = configs[selected_config];

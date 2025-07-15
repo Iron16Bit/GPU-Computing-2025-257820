@@ -434,7 +434,7 @@ void get_adaptive_thresholds(const struct MAT_STATS *stats, int *threshold, int 
 
 // ============== KERNEL FORWARD DECLARATION ==============
 
-__global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
+__global__ void spmv(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
                                               const int *long_rows, const int *very_long_rows,
@@ -510,7 +510,7 @@ struct PreprocessingTimes preprocessing_benchmark(int n, int nnz, const int *row
 // ============== DUMMY KERNEL FOR BENCHMARKING ==============
 
 // Dual-strategy SpMV kernel with row-based partitioning
-__global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
+__global__ void spmv(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
                                               const int *long_rows, const int *very_long_rows,
