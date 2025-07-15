@@ -168,6 +168,14 @@ void classify_and_split_rows(const int *row_ptr, int n,
     }
 }
 
+struct CONFIG_OPTION {
+    const char* name;
+    int short_threshold;
+    int long_threshold;
+    int threads_per_block;
+    const char* description;
+};
+
 void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
                                int &total_blocks, int &threads,
                                int **short_rows, int **long_rows, 
@@ -181,65 +189,97 @@ void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
     temp_csr.num_non_zeros = nnz;
     struct MAT_STATS stats = calculate_enhanced_matrix_stats(&temp_csr);
     
-    int short_threshold, long_threshold;
+    printf("Matrix Statistics:\n");
+    printf("  Rows: %d, NNZ: %d\n", n, nnz);
+    printf("  Mean NNZ/row: %.2f, Std Dev: %.2f\n", 
+           stats.mean_nnz_per_row, stats.std_dev_nnz_per_row);
+    printf("  Max NNZ/row: %d, Min NNZ/row: %d\n", stats.max_nnz_per_row, stats.min_nnz_per_row);
+    printf("  Empty rows: %d (%.1f%%)\n", stats.empty_rows, 100.0 * stats.empty_rows / n);
+    printf("\n");
     
-    if (stats.ultra_long_rows > 0) {
-        if (stats.mean_nnz_per_row < 2.0) {
-            short_threshold = 1;
-            long_threshold = 8;
-        } else {
-            short_threshold = 4;
-            long_threshold = 32;
-        }
-        threads = 1024;
-    } else if (stats.mean_nnz_per_row < 2.0) {
-        short_threshold = 8;
-        long_threshold = 64;
-        threads = 1024;
-    } else if (stats.mean_nnz_per_row < 10.0) {
-        short_threshold = 16;
-        long_threshold = 128;
-        threads = 1024;
-    } else if (n < 100000) {
-        short_threshold = 16;
-        long_threshold = 128;
-        threads = 1024;
+    // {name, short_threshold, long_threshold, threads_per_block, description}
+    CONFIG_OPTION configs[] = {
+        {"Short-Dense", 16, 64, 1024, "Optimized for short dense rows"}, // More rows as short for uniform small matrices
+        {"Medium-Balanced", 32, 128, 1024, "Balanced for medium row lengths"}, // Good balance for most matrices
+        {"High-Variance", 16, 96, 1024, "Optimized for high variance matrices"}, // Conservative short threshold to handle irregularity
+        {"Very-Dense", 64, 256, 1024, "Optimized for very dense matrices"} // High thresholds to avoid atomic overhead
+    };
+    
+    int selected_config = 1; // Default to Medium-Balanced
+    
+    printf("Auto-Selection Logic:\n");
+    
+    // Improved selection logic based on matrix characteristics
+    if (stats.mean_nnz_per_row < 15.0) {
+        selected_config = 0; // Short-Dense
+        printf("  Matrix has short rows (mean=%.2f) -> Selecting Short-Dense\n", stats.mean_nnz_per_row);
+    } else if (stats.mean_nnz_per_row > 100.0) {
+        selected_config = 3; // Very-Dense
+        printf("  Matrix is very dense (mean=%.2f) -> Selecting Very-Dense\n", stats.mean_nnz_per_row);
+    } else if (stats.std_dev_nnz_per_row > stats.mean_nnz_per_row * 1.0) {
+        selected_config = 2; // High-Variance
+        printf("  Matrix has high variance (std=%.2f, mean=%.2f) -> Selecting High-Variance\n", 
+               stats.std_dev_nnz_per_row, stats.mean_nnz_per_row);
     } else {
-        short_threshold = 32;
-        long_threshold = 256;
-        threads = 1024;
+        selected_config = 1; // Medium-Balanced
+        printf("  Matrix has medium density (mean=%.2f, std=%.2f) -> Selecting Medium-Balanced\n", 
+               stats.mean_nnz_per_row, stats.std_dev_nnz_per_row);
     }
+    
+    CONFIG_OPTION chosen = configs[selected_config];
+    threads = chosen.threads_per_block;
+    
+    printf("\nSelected Configuration: %s\n", chosen.name);
+    printf("  Short threshold: <= %d elements\n", chosen.short_threshold);
+    printf("  Long threshold: <= %d elements\n", chosen.long_threshold);
+    printf("  Threads per block: %d\n", chosen.threads_per_block);
+    printf("  Strategy: %s\n", chosen.description);
     
     classify_and_split_rows(row_ptr, n, short_rows, long_rows, ultra_long_chunks,
                            num_short, num_long, num_ultra_long_chunks,
-                           short_threshold, long_threshold);
+                           chosen.short_threshold, chosen.long_threshold);
+    
+    printf("\nFinal Classification:\n");
+    printf("  Short rows: %d (%.1f%%) - 1 thread per row\n",
+           *num_short, 100.0 * (*num_short) / n);
+    printf("  Long rows: %d (%.1f%%) - Warp-cooperative processing\n",
+           *num_long, 100.0 * (*num_long) / n);
+    printf("  Ultra long chunks: %d - Block-level parallel processing\n", *num_ultra_long_chunks);
     
     *short_blocks = (*num_short + threads - 1) / threads;
     *long_blocks = (*num_long + (threads / WARP_SIZE) - 1) / (threads / WARP_SIZE);
     *ultra_long_blocks = *num_ultra_long_chunks;
     
     total_blocks = *short_blocks + *long_blocks + *ultra_long_blocks;
+    
+    printf("\nLaunch Configuration:\n");
+    printf("  Short rows: %d blocks x %d threads = %d total threads\n", 
+           *short_blocks, threads, *short_blocks * threads);
+    printf("  Long rows: %d blocks x %d threads (%d warps)\n", 
+           *long_blocks, threads, *long_blocks * (threads / WARP_SIZE));
+    printf("  Ultra long chunks: %d blocks x 256 threads\n", *ultra_long_blocks);
+    printf("  Total blocks: %d\n", total_blocks);
+    printf("\n");
 }
 
-__global__ void enhanced_adaptive_spmv(const double *__restrict__ csr_values, 
-                                       const int *__restrict__ csr_row_ptr,
-                                       const int *__restrict__ csr_col_indices, 
-                                       const double *__restrict__ vec,
-                                       double *__restrict__ res, int n, 
-                                       const int *__restrict__ short_rows,
-                                       const int *__restrict__ long_rows, 
-                                       const ROW_CHUNK *__restrict__ ultra_long_chunks,
-                                       int num_short, int num_long, int num_ultra_long_chunks,
-                                       int short_blocks, int long_blocks, 
-                                       int phase, int block_offset = 0) {
+__global__ void unified_adaptive_spmv(const double *__restrict__ csr_values, 
+                                     const int *__restrict__ csr_row_ptr,
+                                     const int *__restrict__ csr_col_indices, 
+                                     const double *__restrict__ vec,
+                                     double *__restrict__ res, int n, 
+                                     const int *__restrict__ short_rows,
+                                     const int *__restrict__ long_rows, 
+                                     const ROW_CHUNK *__restrict__ ultra_long_chunks,
+                                     int num_short, int num_long, int num_ultra_long_chunks,
+                                     int short_blocks, int long_blocks, int ultra_long_blocks) {
     
-    const int effective_block_id = blockIdx.x + block_offset;
+    const int block_id = blockIdx.x;
     const int thread_id = threadIdx.x;
     const int warp_lane = thread_id & (WARP_SIZE - 1);
     const int warp_id = thread_id >> 5;
     
-    if (phase == 0 && effective_block_id < short_blocks) {
-        const int global_thread_id = effective_block_id * blockDim.x + thread_id;
+    if (block_id < short_blocks) {
+        const int global_thread_id = block_id * blockDim.x + thread_id;
         if (global_thread_id >= num_short) return;
         
         const int row = short_rows[global_thread_id];
@@ -247,15 +287,15 @@ __global__ void enhanced_adaptive_spmv(const double *__restrict__ csr_values,
         const int end = csr_row_ptr[row + 1];
         
         double sum = 0.0;
+        
         #pragma unroll 4
         for (int idx = start; idx < end; idx++) {
             sum += csr_values[idx] * __ldg(&vec[csr_col_indices[idx]]);
         }
         res[row] = sum;
     }
-    
-    else if (phase == 1 && effective_block_id < long_blocks) {
-        int warp_global_id = effective_block_id * (blockDim.x >> 5) + warp_id;
+    else if (block_id < short_blocks + long_blocks) {
+        int warp_global_id = (block_id - short_blocks) * (blockDim.x >> 5) + warp_id;
         
         if (warp_global_id < num_long) {
             int row = long_rows[warp_global_id];
@@ -278,54 +318,65 @@ __global__ void enhanced_adaptive_spmv(const double *__restrict__ csr_values,
             }
         }
     }
-    
-    else if (phase == 2 && effective_block_id < num_ultra_long_chunks) {
-        const ROW_CHUNK chunk = ultra_long_chunks[effective_block_id];
+    else if (block_id < short_blocks + long_blocks + ultra_long_blocks) {
+        const int ultra_long_idx = block_id - short_blocks - long_blocks;
+        if (ultra_long_idx >= num_ultra_long_chunks) return;
+        
+        const ROW_CHUNK chunk = ultra_long_chunks[ultra_long_idx];
         const int row = chunk.row_id;
         const int start = chunk.chunk_start;
         const int end = chunk.chunk_end;
+        const int row_length = end - start;
+        
+        const int lane_id = thread_id & (WARP_SIZE - 1);
         
         double thread_sum = 0.0;
         
-        for (int idx = start + thread_id; idx < end; idx += blockDim.x) {
-            thread_sum += csr_values[idx] * __ldg(&vec[csr_col_indices[idx]]);
-        }
+        const int elements_per_thread = (row_length > 2048) ? 8 : 4;
+        const int chunk_size = blockDim.x * elements_per_thread;
+        const int total_chunks = (row_length + chunk_size - 1) / chunk_size;
         
-        __shared__ double sdata[256];
-        if (thread_id < 256) {
-            sdata[thread_id] = thread_sum;
-        }
-        __syncthreads();
-        
-        for (int stride = min(blockDim.x, 256) >> 1; stride > 0; stride >>= 1) {
-            if (thread_id < stride && thread_id + stride < 256) {
-                sdata[thread_id] += sdata[thread_id + stride];
+        for (int chunk = 0; chunk < total_chunks; chunk++) {
+            int chunk_start = start + chunk * chunk_size;
+            int thread_start = chunk_start + thread_id * elements_per_thread;
+            
+            if (elements_per_thread == 8) {
+                if (thread_start < end) 
+                    thread_sum += csr_values[thread_start] * __ldg(&vec[csr_col_indices[thread_start]]);
+                if (thread_start + 1 < end) 
+                    thread_sum += csr_values[thread_start + 1] * __ldg(&vec[csr_col_indices[thread_start + 1]]);
+                if (thread_start + 2 < end) 
+                    thread_sum += csr_values[thread_start + 2] * __ldg(&vec[csr_col_indices[thread_start + 2]]);
+                if (thread_start + 3 < end) 
+                    thread_sum += csr_values[thread_start + 3] * __ldg(&vec[csr_col_indices[thread_start + 3]]);
+                if (thread_start + 4 < end) 
+                    thread_sum += csr_values[thread_start + 4] * __ldg(&vec[csr_col_indices[thread_start + 4]]);
+                if (thread_start + 5 < end) 
+                    thread_sum += csr_values[thread_start + 5] * __ldg(&vec[csr_col_indices[thread_start + 5]]);
+                if (thread_start + 6 < end) 
+                    thread_sum += csr_values[thread_start + 6] * __ldg(&vec[csr_col_indices[thread_start + 6]]);
+                if (thread_start + 7 < end) 
+                    thread_sum += csr_values[thread_start + 7] * __ldg(&vec[csr_col_indices[thread_start + 7]]);
+            } else {
+                if (thread_start < end) 
+                    thread_sum += csr_values[thread_start] * __ldg(&vec[csr_col_indices[thread_start]]);
+                if (thread_start + 1 < end) 
+                    thread_sum += csr_values[thread_start + 1] * __ldg(&vec[csr_col_indices[thread_start + 1]]);
+                if (thread_start + 2 < end) 
+                    thread_sum += csr_values[thread_start + 2] * __ldg(&vec[csr_col_indices[thread_start + 2]]);
+                if (thread_start + 3 < end) 
+                    thread_sum += csr_values[thread_start + 3] * __ldg(&vec[csr_col_indices[thread_start + 3]]);
             }
-            __syncthreads();
         }
         
-        if (thread_id == 0) {
-            atomicAdd(&res[row], sdata[0]);
+        #pragma unroll
+        for (int stride = 16; stride > 0; stride >>= 1) {
+            thread_sum += __shfl_down_sync(0xFFFFFFFF, thread_sum, stride);
         }
-    }
-}
-
-__global__ void simple_spmv_small_matrix(const double *__restrict__ csr_values, 
-                                         const int *__restrict__ csr_row_ptr,
-                                         const int *__restrict__ csr_col_indices, 
-                                         const double *__restrict__ vec,
-                                         double *__restrict__ res, int n) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (row < n) {
-        int start = csr_row_ptr[row];
-        int end = csr_row_ptr[row + 1];
         
-        double sum = 0.0;
-        for (int idx = start; idx < end; idx++) {
-            sum += csr_values[idx] * vec[csr_col_indices[idx]];
+        if (lane_id == 0) {
+            atomicAdd(&res[row], thread_sum);
         }
-        res[row] = sum;
     }
 }
 
@@ -484,6 +535,10 @@ int main(int argc, char *argv[]) {
     cudaEvent_t start, stop;
     double totalTime = 0.0;
     
+    int total_kernel_blocks = short_blocks + long_blocks + ultra_long_blocks;
+    
+    int unified_threads = 1024;
+    
     for (int i = 0; i < ITERATIONS; i++) {
         CUDA_CHECK(cudaMemset(C, 0, rows * sizeof(double)));
         
@@ -491,31 +546,13 @@ int main(int argc, char *argv[]) {
         CUDA_CHECK(cudaEventCreate(&stop));
         CUDA_CHECK(cudaEventRecord(start));
         
-        if (short_blocks > 0) {
-            enhanced_adaptive_spmv<<<short_blocks, threads>>>(
+        if (total_kernel_blocks > 0) {
+            unified_adaptive_spmv<<<total_kernel_blocks, unified_threads>>>(
                 csr_vals, row_ptr, csr_cols, v, C, rows,
                 d_short_rows, d_long_rows, d_ultra_long_chunks,
                 num_short, num_long, num_ultra_long_chunks,
-                short_blocks, long_blocks, 0, 0);
-            checkCudaError("enhanced_adaptive_spmv phase 0");
-        }
-        
-        if (long_blocks > 0) {
-            enhanced_adaptive_spmv<<<long_blocks, threads>>>(
-                csr_vals, row_ptr, csr_cols, v, C, rows,
-                d_short_rows, d_long_rows, d_ultra_long_chunks,
-                num_short, num_long, num_ultra_long_chunks,
-                short_blocks, long_blocks, 1, 0);
-            checkCudaError("enhanced_adaptive_spmv phase 1");
-        }
-        
-        if (ultra_long_blocks > 0) {
-            enhanced_adaptive_spmv<<<ultra_long_blocks, 256>>>(
-                csr_vals, row_ptr, csr_cols, v, C, rows,
-                d_short_rows, d_long_rows, d_ultra_long_chunks,
-                num_short, num_long, num_ultra_long_chunks,
-                short_blocks, long_blocks, 2, 0);
-            checkCudaError("enhanced_adaptive_spmv phase 2");
+                short_blocks, long_blocks, ultra_long_blocks);
+            checkCudaError("unified_adaptive_spmv (all strategies)");
         }
         
         CUDA_CHECK(cudaEventRecord(stop));
