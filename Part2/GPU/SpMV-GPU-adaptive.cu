@@ -213,7 +213,7 @@ void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
         selected_config = 0; // Short-Dense
         printf("  Matrix has short rows (mean=%.2f) -> Selecting Short-Dense\n", stats.mean_nnz_per_row);
     } else if (stats.mean_nnz_per_row > 100.0) {
-        selected_config = 3; // Dense
+        selected_config = 2; // Dense
         printf("  Matrix is very dense (mean=%.2f) -> Selecting Dense\n", stats.mean_nnz_per_row);
     } else {
         selected_config = 1; // Balanced
