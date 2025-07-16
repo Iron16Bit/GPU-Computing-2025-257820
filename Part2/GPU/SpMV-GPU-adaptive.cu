@@ -13,7 +13,7 @@
 #define WARP_SIZE 32
 #define ITERATIONS 51
 #define MAX_ROW_SPLIT_SIZE 4096
-#define ULTRA_LONG_THRESHOLD 8192
+#define very_long_THRESHOLD 8192
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t error = call; \
@@ -50,7 +50,7 @@ struct MAT_STATS {
     int min_nnz_per_row;
     int empty_rows;
     double variance_nnz_per_row;
-    int ultra_long_rows;
+    int very_long_rows;
 };
 
 struct ROW_CHUNK {
@@ -66,7 +66,7 @@ struct MAT_STATS calculate_enhanced_matrix_stats(const struct CSR *matrix) {
     
     stats.min_nnz_per_row = INT_MAX;
     stats.max_nnz_per_row = 0;
-    stats.ultra_long_rows = 0;
+    stats.very_long_rows = 0;
     
     double sum = 0.0;
     double sum_squares = 0.0;
@@ -78,8 +78,8 @@ struct MAT_STATS calculate_enhanced_matrix_stats(const struct CSR *matrix) {
             stats.empty_rows++;
         }
         
-        if (row_nnz > ULTRA_LONG_THRESHOLD) {
-            stats.ultra_long_rows++;
+        if (row_nnz > very_long_THRESHOLD) {
+            stats.very_long_rows++;
         }
         
         if (row_nnz < stats.min_nnz_per_row) {
@@ -102,18 +102,18 @@ struct MAT_STATS calculate_enhanced_matrix_stats(const struct CSR *matrix) {
 
 void classify_and_split_rows(const int *row_ptr, int n, 
                              int **short_rows, int **long_rows, 
-                             ROW_CHUNK **ultra_long_chunks,
-                             int *num_short, int *num_long, int *num_ultra_long_chunks,
+                             ROW_CHUNK **very_long_chunks,
+                             int *num_short, int *num_long, int *num_very_long_chunks,
                              int short_threshold, int long_threshold) {
     
     *num_short = 0;
     *num_long = 0;
-    *num_ultra_long_chunks = 0;
+    *num_very_long_chunks = 0;
     
     std::vector<ROW_CHUNK> temp_chunks;
-    int ultra_long_rows_count = 0;
+    int very_long_rows_count = 0;
     int max_chunks_for_single_row = 0;
-    int total_ultra_long_elements = 0;
+    int total_very_long_elements = 0;
     
     for (int i = 0; i < n; i++) {
         int row_length = row_ptr[i + 1] - row_ptr[i];
@@ -123,8 +123,8 @@ void classify_and_split_rows(const int *row_ptr, int n,
         } else if (row_length <= long_threshold) {
             (*num_long)++;
         } else {
-            ultra_long_rows_count++;
-            total_ultra_long_elements += row_length;
+            very_long_rows_count++;
+            total_very_long_elements += row_length;
             
             int chunks_needed = (row_length + MAX_ROW_SPLIT_SIZE - 1) / MAX_ROW_SPLIT_SIZE;
             max_chunks_for_single_row = max(max_chunks_for_single_row, chunks_needed);
@@ -138,15 +138,15 @@ void classify_and_split_rows(const int *row_ptr, int n,
                 rc.total_chunks = chunks_needed;
                 temp_chunks.push_back(rc);
             }
-            *num_ultra_long_chunks += chunks_needed;
+            *num_very_long_chunks += chunks_needed;
         }
     }
     
     *short_rows = (int*)malloc(*num_short * sizeof(int));
     *long_rows = (int*)malloc(*num_long * sizeof(int));
-    *ultra_long_chunks = (ROW_CHUNK*)malloc(*num_ultra_long_chunks * sizeof(ROW_CHUNK));
+    *very_long_chunks = (ROW_CHUNK*)malloc(*num_very_long_chunks * sizeof(ROW_CHUNK));
     
-    if (!*short_rows || !*long_rows || !*ultra_long_chunks) {
+    if (!*short_rows || !*long_rows || !*very_long_chunks) {
         printf("Error: Failed to allocate memory for enhanced row classification\n");
         return;
     }
@@ -164,7 +164,7 @@ void classify_and_split_rows(const int *row_ptr, int n,
     }
     
     for (size_t i = 0; i < temp_chunks.size(); i++) {
-        (*ultra_long_chunks)[i] = temp_chunks[i];
+        (*very_long_chunks)[i] = temp_chunks[i];
     }
 }
 
@@ -179,9 +179,9 @@ struct CONFIG_OPTION {
 void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
                                int &total_blocks, int &threads,
                                int **short_rows, int **long_rows, 
-                               ROW_CHUNK **ultra_long_chunks,
-                               int *num_short, int *num_long, int *num_ultra_long_chunks,
-                               int *short_blocks, int *long_blocks, int *ultra_long_blocks) {
+                               ROW_CHUNK **very_long_chunks,
+                               int *num_short, int *num_long, int *num_very_long_chunks,
+                               int *short_blocks, int *long_blocks, int *very_long_blocks) {
     
     struct CSR temp_csr;
     temp_csr.row_pointers = (int*)row_ptr;
@@ -230,8 +230,8 @@ void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
     printf("  Threads per block: %d\n", chosen.threads_per_block);
     printf("  Strategy: %s\n", chosen.description);
     
-    classify_and_split_rows(row_ptr, n, short_rows, long_rows, ultra_long_chunks,
-                           num_short, num_long, num_ultra_long_chunks,
+    classify_and_split_rows(row_ptr, n, short_rows, long_rows, very_long_chunks,
+                           num_short, num_long, num_very_long_chunks,
                            chosen.short_threshold, chosen.long_threshold);
     
     printf("\nFinal Classification:\n");
@@ -239,34 +239,34 @@ void get_enhanced_launch_config(int n, int nnz, const int *row_ptr,
            *num_short, 100.0 * (*num_short) / n);
     printf("  Long rows: %d (%.1f%%) - Warp-cooperative processing\n",
            *num_long, 100.0 * (*num_long) / n);
-    printf("  Ultra long chunks: %d - Block-level parallel processing\n", *num_ultra_long_chunks);
+    printf("  Ultra long chunks: %d - Block-level parallel processing\n", *num_very_long_chunks);
     
     *short_blocks = (*num_short + threads - 1) / threads;
     *long_blocks = (*num_long + (threads / WARP_SIZE) - 1) / (threads / WARP_SIZE);
-    *ultra_long_blocks = *num_ultra_long_chunks;
+    *very_long_blocks = *num_very_long_chunks;
     
-    total_blocks = *short_blocks + *long_blocks + *ultra_long_blocks;
+    total_blocks = *short_blocks + *long_blocks + *very_long_blocks;
     
     printf("\nLaunch Configuration:\n");
     printf("  Short rows: %d blocks x %d threads = %d total threads\n", 
            *short_blocks, threads, *short_blocks * threads);
     printf("  Long rows: %d blocks x %d threads (%d warps)\n", 
            *long_blocks, threads, *long_blocks * (threads / WARP_SIZE));
-    printf("  Ultra long chunks: %d blocks x 256 threads\n", *ultra_long_blocks);
+    printf("  Ultra long chunks: %d blocks x 256 threads\n", *very_long_blocks);
     printf("  Total blocks: %d\n", total_blocks);
     printf("\n");
 }
 
-__global__ void unified_adaptive_spmv(const double *__restrict__ csr_values, 
+__global__ void spmv(const double *__restrict__ csr_values, 
                                      const int *__restrict__ csr_row_ptr,
                                      const int *__restrict__ csr_col_indices, 
                                      const double *__restrict__ vec,
                                      double *__restrict__ res, int n, 
                                      const int *__restrict__ short_rows,
                                      const int *__restrict__ long_rows, 
-                                     const ROW_CHUNK *__restrict__ ultra_long_chunks,
-                                     int num_short, int num_long, int num_ultra_long_chunks,
-                                     int short_blocks, int long_blocks, int ultra_long_blocks) {
+                                     const ROW_CHUNK *__restrict__ very_long_chunks,
+                                     int num_short, int num_long, int num_very_long_chunks,
+                                     int short_blocks, int long_blocks, int very_long_blocks) {
     
     const int block_id = blockIdx.x;
     const int thread_id = threadIdx.x;
@@ -313,11 +313,11 @@ __global__ void unified_adaptive_spmv(const double *__restrict__ csr_values,
             }
         }
     }
-    else if (block_id < short_blocks + long_blocks + ultra_long_blocks) {
-        const int ultra_long_idx = block_id - short_blocks - long_blocks;
-        if (ultra_long_idx >= num_ultra_long_chunks) return;
+    else if (block_id < short_blocks + long_blocks + very_long_blocks) {
+        const int very_long_idx = block_id - short_blocks - long_blocks;
+        if (very_long_idx >= num_very_long_chunks) return;
         
-        const ROW_CHUNK chunk = ultra_long_chunks[ultra_long_idx];
+        const ROW_CHUNK chunk = very_long_chunks[very_long_idx];
         const int row = chunk.row_id;
         const int start = chunk.chunk_start;
         const int end = chunk.chunk_end;
@@ -498,21 +498,21 @@ int main(int argc, char *argv[]) {
     
     int total_blocks, threads;
     int *short_rows, *long_rows;
-    ROW_CHUNK *ultra_long_chunks;
-    int num_short, num_long, num_ultra_long_chunks;
-    int short_blocks, long_blocks, ultra_long_blocks;
+    ROW_CHUNK *very_long_chunks;
+    int num_short, num_long, num_very_long_chunks;
+    int short_blocks, long_blocks, very_long_blocks;
     
     get_enhanced_launch_config(rows, values, row_ptr, total_blocks, threads,
-                              &short_rows, &long_rows, &ultra_long_chunks,
-                              &num_short, &num_long, &num_ultra_long_chunks,
-                              &short_blocks, &long_blocks, &ultra_long_blocks);
+                              &short_rows, &long_rows, &very_long_chunks,
+                              &num_short, &num_long, &num_very_long_chunks,
+                              &short_blocks, &long_blocks, &very_long_blocks);
     
     TIMER_STOP(var);
     time = TIMER_ELAPSED(var) / 1000.0;
     printf("Preprocessing time: %.3f ms\n", time);
     
     int *d_short_rows = nullptr, *d_long_rows = nullptr;
-    ROW_CHUNK *d_ultra_long_chunks = nullptr;
+    ROW_CHUNK *d_very_long_chunks = nullptr;
     
     if (num_short > 0) {
         CUDA_CHECK(cudaMalloc(&d_short_rows, num_short * sizeof(int)));
@@ -522,15 +522,15 @@ int main(int argc, char *argv[]) {
         CUDA_CHECK(cudaMalloc(&d_long_rows, num_long * sizeof(int)));
         CUDA_CHECK(cudaMemcpy(d_long_rows, long_rows, num_long * sizeof(int), cudaMemcpyHostToDevice));
     }
-    if (num_ultra_long_chunks > 0) {
-        CUDA_CHECK(cudaMalloc(&d_ultra_long_chunks, num_ultra_long_chunks * sizeof(ROW_CHUNK)));
-        CUDA_CHECK(cudaMemcpy(d_ultra_long_chunks, ultra_long_chunks, num_ultra_long_chunks * sizeof(ROW_CHUNK), cudaMemcpyHostToDevice));
+    if (num_very_long_chunks > 0) {
+        CUDA_CHECK(cudaMalloc(&d_very_long_chunks, num_very_long_chunks * sizeof(ROW_CHUNK)));
+        CUDA_CHECK(cudaMemcpy(d_very_long_chunks, very_long_chunks, num_very_long_chunks * sizeof(ROW_CHUNK), cudaMemcpyHostToDevice));
     }
     
     cudaEvent_t start, stop;
     double totalTime = 0.0;
     
-    int total_kernel_blocks = short_blocks + long_blocks + ultra_long_blocks;
+    int total_kernel_blocks = short_blocks + long_blocks + very_long_blocks;
     
     int unified_threads = 1024;
     
@@ -542,12 +542,12 @@ int main(int argc, char *argv[]) {
         CUDA_CHECK(cudaEventRecord(start));
         
         if (total_kernel_blocks > 0) {
-            unified_adaptive_spmv<<<total_kernel_blocks, unified_threads>>>(
+            spmv<<<total_kernel_blocks, unified_threads>>>(
                 csr_vals, row_ptr, csr_cols, v, C, rows,
-                d_short_rows, d_long_rows, d_ultra_long_chunks,
-                num_short, num_long, num_ultra_long_chunks,
-                short_blocks, long_blocks, ultra_long_blocks);
-            checkCudaError("unified_adaptive_spmv (all strategies)");
+                d_short_rows, d_long_rows, d_very_long_chunks,
+                num_short, num_long, num_very_long_chunks,
+                short_blocks, long_blocks, very_long_blocks);
+            checkCudaError("spmv (all strategies)");
         }
         
         CUDA_CHECK(cudaEventRecord(stop));
@@ -578,11 +578,11 @@ int main(int argc, char *argv[]) {
     
     if (d_short_rows) CUDA_CHECK(cudaFree(d_short_rows));
     if (d_long_rows) CUDA_CHECK(cudaFree(d_long_rows));
-    if (d_ultra_long_chunks) CUDA_CHECK(cudaFree(d_ultra_long_chunks));
+    if (d_very_long_chunks) CUDA_CHECK(cudaFree(d_very_long_chunks));
     
     free(short_rows);
     free(long_rows);
-    free(ultra_long_chunks);
+    free(very_long_chunks);
     
     return 0;
 }
