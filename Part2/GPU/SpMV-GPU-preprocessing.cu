@@ -11,7 +11,10 @@
 // ============== CONFIGURABLE PARAMETERS ==============
 #define DEFAULT_THREADS_PER_BLOCK 256
 #define WARP_SIZE 32
+#define MAX_SHARED_MEM_PER_BLOCK 48000  // 48KB shared memory
 #define ITERATIONS 51
+#define MAX_ROW_SPLIT_SIZE 4096
+#define ULTRA_LONG_THRESHOLD 8192
 
 // CUDA error checking macro
 #define CUDA_CHECK(call) \
@@ -32,6 +35,10 @@ void checkCudaError(const char* msg) {
     }
 }
 
+// ============== FORWARD DECLARATIONS ==============
+__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                 int *short_count, int *long_count, int *very_long_count);
+
 // ============== MATRIX STATISTICS AND ANALYSIS ==============
 
 struct CSR {
@@ -50,6 +57,15 @@ struct MAT_STATS {
     int min_nnz_per_row;
     int empty_rows;
     double variance_nnz_per_row;
+    int ultra_long_rows;
+};
+
+struct ROW_CHUNK {
+    int row_id;
+    int chunk_start;
+    int chunk_end;
+    int chunk_id;
+    int total_chunks;
 };
 
 struct MAT_STATS calculate_matrix_stats(const struct CSR *matrix) {
@@ -57,6 +73,7 @@ struct MAT_STATS calculate_matrix_stats(const struct CSR *matrix) {
     
     stats.min_nnz_per_row = INT_MAX;
     stats.max_nnz_per_row = 0;
+    stats.ultra_long_rows = 0;
     
     double sum = 0.0;
     double sum_squares = 0.0;
@@ -66,6 +83,10 @@ struct MAT_STATS calculate_matrix_stats(const struct CSR *matrix) {
         
         if (row_nnz == 0) {
             stats.empty_rows++;
+        }
+        
+        if (row_nnz > ULTRA_LONG_THRESHOLD) {
+            stats.ultra_long_rows++;
         }
         
         if (row_nnz < stats.min_nnz_per_row) {
@@ -91,19 +112,22 @@ struct MAT_STATS calculate_matrix_stats(const struct CSR *matrix) {
 // GPU kernel for calculating row lengths and statistics
 __global__ void calculate_row_stats_kernel(const int *row_ptr, int num_rows, 
                                            int *row_lengths, int *min_val, int *max_val, 
-                                           int *empty_count, double *sum, double *sum_squares) {
+                                           int *empty_count, int *ultra_long_count, 
+                                           double *sum, double *sum_squares) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     // Shared memory for block-level reductions
     __shared__ int s_min[256];
     __shared__ int s_max[256];
     __shared__ int s_empty[256];
+    __shared__ int s_ultra_long[256];
     __shared__ double s_sum[256];
     __shared__ double s_sum_sq[256];
     
     int local_min = INT_MAX;
     int local_max = 0;
     int local_empty = 0;
+    int local_ultra_long = 0;
     double local_sum = 0.0;
     double local_sum_sq = 0.0;
     
@@ -114,6 +138,7 @@ __global__ void calculate_row_stats_kernel(const int *row_ptr, int num_rows,
         local_min = row_nnz;
         local_max = row_nnz;
         local_empty = (row_nnz == 0) ? 1 : 0;
+        local_ultra_long = (row_nnz > ULTRA_LONG_THRESHOLD) ? 1 : 0;
         local_sum = (double)row_nnz;
         local_sum_sq = (double)(row_nnz * row_nnz);
     }
@@ -122,6 +147,7 @@ __global__ void calculate_row_stats_kernel(const int *row_ptr, int num_rows,
     s_min[tid] = local_min;
     s_max[tid] = local_max;
     s_empty[tid] = local_empty;
+    s_ultra_long[tid] = local_ultra_long;
     s_sum[tid] = local_sum;
     s_sum_sq[tid] = local_sum_sq;
     __syncthreads();
@@ -132,6 +158,7 @@ __global__ void calculate_row_stats_kernel(const int *row_ptr, int num_rows,
             s_min[tid] = min(s_min[tid], s_min[tid + stride]);
             s_max[tid] = max(s_max[tid], s_max[tid + stride]);
             s_empty[tid] += s_empty[tid + stride];
+            s_ultra_long[tid] += s_ultra_long[tid + stride];
             s_sum[tid] += s_sum[tid + stride];
             s_sum_sq[tid] += s_sum_sq[tid + stride];
         }
@@ -143,6 +170,7 @@ __global__ void calculate_row_stats_kernel(const int *row_ptr, int num_rows,
         atomicMin(min_val, s_min[0]);
         atomicMax(max_val, s_max[0]);
         atomicAdd(empty_count, s_empty[0]);
+        atomicAdd(ultra_long_count, s_ultra_long[0]);
         atomicAdd(sum, s_sum[0]);
         atomicAdd(sum_squares, s_sum_sq[0]);
     }
@@ -152,22 +180,24 @@ struct MAT_STATS calculate_matrix_stats_gpu(const int *row_ptr, int num_rows) {
     struct MAT_STATS stats = {0};
     
     // Allocate GPU memory for statistics
-    int *d_row_lengths, *d_min_val, *d_max_val, *d_empty_count;
+    int *d_row_lengths, *d_min_val, *d_max_val, *d_empty_count, *d_ultra_long_count;
     double *d_sum, *d_sum_squares;
     
     CUDA_CHECK(cudaMalloc(&d_row_lengths, num_rows * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_min_val, sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_max_val, sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_empty_count, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_ultra_long_count, sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_sum, sizeof(double)));
     CUDA_CHECK(cudaMalloc(&d_sum_squares, sizeof(double)));
     
     // Initialize values
-    int init_min = INT_MAX, init_max = 0, init_empty = 0;
+    int init_min = INT_MAX, init_max = 0, init_empty = 0, init_ultra_long = 0;
     double init_sum = 0.0, init_sum_sq = 0.0;
     CUDA_CHECK(cudaMemcpy(d_min_val, &init_min, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_max_val, &init_max, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_empty_count, &init_empty, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_ultra_long_count, &init_ultra_long, sizeof(int), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_sum, &init_sum, sizeof(double), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_sum_squares, &init_sum_sq, sizeof(double), cudaMemcpyHostToDevice));
     
@@ -176,15 +206,16 @@ struct MAT_STATS calculate_matrix_stats_gpu(const int *row_ptr, int num_rows) {
     int blocks = (num_rows + threads - 1) / threads;
     calculate_row_stats_kernel<<<blocks, threads>>>(row_ptr, num_rows, d_row_lengths, 
                                                    d_min_val, d_max_val, d_empty_count, 
-                                                   d_sum, d_sum_squares);
+                                                   d_ultra_long_count, d_sum, d_sum_squares);
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Copy results back
-    int min_val, max_val, empty_count;
+    int min_val, max_val, empty_count, ultra_long_count;
     double sum, sum_squares;
     CUDA_CHECK(cudaMemcpy(&min_val, d_min_val, sizeof(int), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&max_val, d_max_val, sizeof(int), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&empty_count, d_empty_count, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&ultra_long_count, d_ultra_long_count, sizeof(int), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&sum, d_sum, sizeof(double), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&sum_squares, d_sum_squares, sizeof(double), cudaMemcpyDeviceToHost));
     
@@ -192,6 +223,7 @@ struct MAT_STATS calculate_matrix_stats_gpu(const int *row_ptr, int num_rows) {
     stats.min_nnz_per_row = min_val;
     stats.max_nnz_per_row = max_val;
     stats.empty_rows = empty_count;
+    stats.ultra_long_rows = ultra_long_count;
     stats.mean_nnz_per_row = sum / num_rows;
     stats.variance_nnz_per_row = (sum_squares / num_rows) - (stats.mean_nnz_per_row * stats.mean_nnz_per_row);
     stats.std_dev_nnz_per_row = sqrt(stats.variance_nnz_per_row);
@@ -201,6 +233,7 @@ struct MAT_STATS calculate_matrix_stats_gpu(const int *row_ptr, int num_rows) {
     CUDA_CHECK(cudaFree(d_min_val));
     CUDA_CHECK(cudaFree(d_max_val));
     CUDA_CHECK(cudaFree(d_empty_count));
+    CUDA_CHECK(cudaFree(d_ultra_long_count));
     CUDA_CHECK(cudaFree(d_sum));
     CUDA_CHECK(cudaFree(d_sum_squares));
     
@@ -252,6 +285,75 @@ void classify_rows(const int *row_ptr, int n, int **short_rows, int **long_rows,
     }
 }
 
+// Enhanced row classification with ultra-long row chunking
+void classify_and_split_rows(const int *row_ptr, int n, 
+                             int **short_rows, int **long_rows, 
+                             ROW_CHUNK **ultra_long_chunks,
+                             int *num_short, int *num_long, int *num_ultra_long_chunks,
+                             int short_threshold, int long_threshold) {
+    
+    *num_short = 0;
+    *num_long = 0;
+    *num_ultra_long_chunks = 0;
+    
+    std::vector<ROW_CHUNK> temp_chunks;
+    int ultra_long_rows_count = 0;
+    int max_chunks_for_single_row = 0;
+    int total_ultra_long_elements = 0;
+    
+    for (int i = 0; i < n; i++) {
+        int row_length = row_ptr[i + 1] - row_ptr[i];
+        
+        if (row_length <= short_threshold) {
+            (*num_short)++;
+        } else if (row_length <= long_threshold) {
+            (*num_long)++;
+        } else {
+            ultra_long_rows_count++;
+            total_ultra_long_elements += row_length;
+            
+            int chunks_needed = (row_length + MAX_ROW_SPLIT_SIZE - 1) / MAX_ROW_SPLIT_SIZE;
+            max_chunks_for_single_row = std::max(max_chunks_for_single_row, chunks_needed);
+            
+            for (int chunk = 0; chunk < chunks_needed; chunk++) {
+                ROW_CHUNK rc;
+                rc.row_id = i;
+                rc.chunk_start = row_ptr[i] + chunk * MAX_ROW_SPLIT_SIZE;
+                rc.chunk_end = std::min(rc.chunk_start + MAX_ROW_SPLIT_SIZE, row_ptr[i + 1]);
+                rc.chunk_id = chunk;
+                rc.total_chunks = chunks_needed;
+                temp_chunks.push_back(rc);
+            }
+            *num_ultra_long_chunks += chunks_needed;
+        }
+    }
+    
+    *short_rows = (int*)malloc(*num_short * sizeof(int));
+    *long_rows = (int*)malloc(*num_long * sizeof(int));
+    *ultra_long_chunks = (ROW_CHUNK*)malloc(*num_ultra_long_chunks * sizeof(ROW_CHUNK));
+    
+    if (!*short_rows || !*long_rows || !*ultra_long_chunks) {
+        printf("Error: Failed to allocate memory for enhanced row classification\n");
+        return;
+    }
+    
+    int short_idx = 0, long_idx = 0;
+    
+    for (int i = 0; i < n; i++) {
+        int row_length = row_ptr[i + 1] - row_ptr[i];
+        
+        if (row_length <= short_threshold) {
+            (*short_rows)[short_idx++] = i;
+        } else if (row_length <= long_threshold) {
+            (*long_rows)[long_idx++] = i;
+        }
+    }
+    
+    for (size_t i = 0; i < temp_chunks.size(); i++) {
+        (*ultra_long_chunks)[i] = temp_chunks[i];
+    }
+}
+
 // ============== GPU ROW CLASSIFICATION ==============
 
 // GPU kernel for row classification
@@ -276,19 +378,19 @@ __global__ void classify_rows_kernel(const int *row_ptr, int n, int threshold, i
     }
 }
 
-// GPU kernel for counting rows by type (first pass)
-__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
-                                 int *short_count, int *long_count, int *very_long_count) {
+// GPU kernel for counting rows by type including ultra-long chunks (first pass)
+__global__ void count_rows_with_chunks_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                             int *short_count, int *long_count, int *ultra_long_chunk_count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     __shared__ int s_short[256];
     __shared__ int s_long[256];
-    __shared__ int s_very_long[256];
+    __shared__ int s_ultra_long_chunks[256];
     
     int tid = threadIdx.x;
     s_short[tid] = 0;
     s_long[tid] = 0;
-    s_very_long[tid] = 0;
+    s_ultra_long_chunks[tid] = 0;
     
     if (idx < n) {
         int row_length = row_ptr[idx + 1] - row_ptr[idx];
@@ -297,7 +399,9 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int 
         } else if (row_length <= very_long_threshold) {
             s_long[tid] = 1;
         } else {
-            s_very_long[tid] = 1;
+            // Calculate chunks needed for ultra-long row
+            int chunks_needed = (row_length + MAX_ROW_SPLIT_SIZE - 1) / MAX_ROW_SPLIT_SIZE;
+            s_ultra_long_chunks[tid] = chunks_needed;
         }
     }
     __syncthreads();
@@ -307,7 +411,7 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int 
         if (tid < stride) {
             s_short[tid] += s_short[tid + stride];
             s_long[tid] += s_long[tid + stride];
-            s_very_long[tid] += s_very_long[tid + stride];
+            s_ultra_long_chunks[tid] += s_ultra_long_chunks[tid + stride];
         }
         __syncthreads();
     }
@@ -315,8 +419,136 @@ __global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int 
     if (tid == 0) {
         atomicAdd(short_count, s_short[0]);
         atomicAdd(long_count, s_long[0]);
-        atomicAdd(very_long_count, s_very_long[0]);
+        atomicAdd(ultra_long_chunk_count, s_ultra_long_chunks[0]);
     }
+}
+
+// GPU kernel for ultra-long row chunk creation
+__global__ void create_ultra_long_chunks_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                               ROW_CHUNK *ultra_long_chunks, int *chunk_count) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < n) {
+        int row_length = row_ptr[idx + 1] - row_ptr[idx];
+        
+        if (row_length > very_long_threshold) {
+            int chunks_needed = (row_length + MAX_ROW_SPLIT_SIZE - 1) / MAX_ROW_SPLIT_SIZE;
+            int start_pos = atomicAdd(chunk_count, chunks_needed);
+            
+            for (int chunk = 0; chunk < chunks_needed; chunk++) {
+                ROW_CHUNK rc;
+                rc.row_id = idx;
+                rc.chunk_start = row_ptr[idx] + chunk * MAX_ROW_SPLIT_SIZE;
+                rc.chunk_end = min(rc.chunk_start + MAX_ROW_SPLIT_SIZE, row_ptr[idx + 1]);
+                rc.chunk_id = chunk;
+                rc.total_chunks = chunks_needed;
+                ultra_long_chunks[start_pos + chunk] = rc;
+            }
+        }
+    }
+}
+
+void classify_and_split_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_rows, 
+                                ROW_CHUNK **ultra_long_chunks, int *num_short, int *num_long, 
+                                int *num_ultra_long_chunks, int threshold, int very_long_threshold) {
+    
+    // GPU memory for counters
+    int *d_short_count, *d_long_count, *d_ultra_long_chunk_count;
+    CUDA_CHECK(cudaMalloc(&d_short_count, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_long_count, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_ultra_long_chunk_count, sizeof(int)));
+    
+    // Initialize counters
+    int zero = 0;
+    CUDA_CHECK(cudaMemcpy(d_short_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_ultra_long_chunk_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    
+    // First pass: count rows and chunks
+    int threads = 256;
+    int blocks = (n + threads - 1) / threads;
+    count_rows_with_chunks_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold, 
+                                                      d_short_count, d_long_count, d_ultra_long_chunk_count);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    
+    // Get counts
+    CUDA_CHECK(cudaMemcpy(num_short, d_short_count, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(num_long, d_long_count, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(num_ultra_long_chunks, d_ultra_long_chunk_count, sizeof(int), cudaMemcpyDeviceToHost));
+    
+    // Allocate arrays on host
+    *short_rows = (int*)malloc(*num_short * sizeof(int));
+    *long_rows = (int*)malloc(*num_long * sizeof(int));
+    *ultra_long_chunks = (ROW_CHUNK*)malloc(*num_ultra_long_chunks * sizeof(ROW_CHUNK));
+    
+    if (*num_short > 0 && !*short_rows) {
+        printf("Error: Failed to allocate memory for short rows\n");
+        return;
+    }
+    if (*num_long > 0 && !*long_rows) {
+        printf("Error: Failed to allocate memory for long rows\n");
+        return;
+    }
+    if (*num_ultra_long_chunks > 0 && !*ultra_long_chunks) {
+        printf("Error: Failed to allocate memory for ultra long chunks\n");
+        return;
+    }
+    
+    // GPU arrays for classification
+    int *d_short_rows, *d_long_rows;
+    ROW_CHUNK *d_ultra_long_chunks;
+    
+    if (*num_short > 0) {
+        CUDA_CHECK(cudaMalloc(&d_short_rows, *num_short * sizeof(int)));
+    }
+    if (*num_long > 0) {
+        CUDA_CHECK(cudaMalloc(&d_long_rows, *num_long * sizeof(int)));
+    }
+    if (*num_ultra_long_chunks > 0) {
+        CUDA_CHECK(cudaMalloc(&d_ultra_long_chunks, *num_ultra_long_chunks * sizeof(ROW_CHUNK)));
+    }
+    
+    // Reset counters for second pass
+    CUDA_CHECK(cudaMemcpy(d_short_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_long_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_ultra_long_chunk_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    
+    // Second pass: populate short and long arrays
+    if (*num_short > 0 || *num_long > 0) {
+        classify_rows_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold,
+                                                 (*num_short > 0) ? d_short_rows : nullptr,
+                                                 (*num_long > 0) ? d_long_rows : nullptr,
+                                                 nullptr, // Skip very_long_rows for now
+                                                 d_short_count, d_long_count, d_ultra_long_chunk_count);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+    
+    // Third pass: create ultra-long chunks
+    if (*num_ultra_long_chunks > 0) {
+        CUDA_CHECK(cudaMemcpy(d_ultra_long_chunk_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
+        create_ultra_long_chunks_kernel<<<blocks, threads>>>(row_ptr, n, threshold, very_long_threshold,
+                                                             d_ultra_long_chunks, d_ultra_long_chunk_count);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+    
+    // Copy results back to host
+    if (*num_short > 0) {
+        CUDA_CHECK(cudaMemcpy(*short_rows, d_short_rows, *num_short * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_short_rows));
+    }
+    if (*num_long > 0) {
+        CUDA_CHECK(cudaMemcpy(*long_rows, d_long_rows, *num_long * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_long_rows));
+    }
+    if (*num_ultra_long_chunks > 0) {
+        CUDA_CHECK(cudaMemcpy(*ultra_long_chunks, d_ultra_long_chunks, *num_ultra_long_chunks * sizeof(ROW_CHUNK), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_ultra_long_chunks));
+    }
+    
+    // Cleanup
+    CUDA_CHECK(cudaFree(d_short_count));
+    CUDA_CHECK(cudaFree(d_long_count));
+    CUDA_CHECK(cudaFree(d_ultra_long_chunk_count));
 }
 
 void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_rows, int **very_long_rows,
@@ -409,6 +641,49 @@ void classify_rows_gpu(const int *row_ptr, int n, int **short_rows, int **long_r
     CUDA_CHECK(cudaFree(d_very_long_count));
 }
 
+// GPU kernel for counting rows by type (first pass) - original version
+__global__ void count_rows_kernel(const int *row_ptr, int n, int threshold, int very_long_threshold,
+                                 int *short_count, int *long_count, int *very_long_count) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    __shared__ int s_short[256];
+    __shared__ int s_long[256];
+    __shared__ int s_very_long[256];
+    
+    int tid = threadIdx.x;
+    s_short[tid] = 0;
+    s_long[tid] = 0;
+    s_very_long[tid] = 0;
+    
+    if (idx < n) {
+        int row_length = row_ptr[idx + 1] - row_ptr[idx];
+        if (row_length <= threshold) {
+            s_short[tid] = 1;
+        } else if (row_length <= very_long_threshold) {
+            s_long[tid] = 1;
+        } else {
+            s_very_long[tid] = 1;
+        }
+    }
+    __syncthreads();
+    
+    // Block-level reduction
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_short[tid] += s_short[tid + stride];
+            s_long[tid] += s_long[tid + stride];
+            s_very_long[tid] += s_very_long[tid + stride];
+        }
+        __syncthreads();
+    }
+    
+    if (tid == 0) {
+        atomicAdd(short_count, s_short[0]);
+        atomicAdd(long_count, s_long[0]);
+        atomicAdd(very_long_count, s_very_long[0]);
+    }
+}
+
 // ============== ADAPTIVE THRESHOLD SELECTION ==============
 
 void get_adaptive_thresholds(const struct MAT_STATS *stats, int *threshold, int *very_long_threshold) {
@@ -434,7 +709,7 @@ void get_adaptive_thresholds(const struct MAT_STATS *stats, int *threshold, int 
 
 // ============== KERNEL FORWARD DECLARATION ==============
 
-__global__ void spmv(const double *csr_values, const int *csr_row_ptr,
+__global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
                                               const int *long_rows, const int *very_long_rows,
@@ -510,7 +785,7 @@ struct PreprocessingTimes preprocessing_benchmark(int n, int nnz, const int *row
 // ============== DUMMY KERNEL FOR BENCHMARKING ==============
 
 // Dual-strategy SpMV kernel with row-based partitioning
-__global__ void spmv(const double *csr_values, const int *csr_row_ptr,
+__global__ void hybrid_adaptive_spmv_optimized(const double *csr_values, const int *csr_row_ptr,
                                               const int *csr_col_indices, const double *vec,
                                               double *res, int n, const int *short_rows, 
                                               const int *long_rows, const int *very_long_rows,
